@@ -37,9 +37,9 @@
         "other_text_thickness": 0.15,
         "other_text_upright": false,
         "pads": {
-          "drill": 0.8,
-          "height": 1.27,
-          "width": 2.54
+          "drill": 0.0,
+          "height": 0.95,
+          "width": 0.8
         },
         "silk_line_width": 0.1,
         "silk_text_italic": false,
@@ -487,51 +487,58 @@
         "wire_width": 6
       },
       {
+        "name": "ALSENS",
+        "pcb_color": "rgb(255, 141, 0)",
+        "priority": 0,
+        "schematic_color": "rgb(255, 141, 0)"
+      },
+      {
         "name": "DEBUG",
         "pcb_color": "rgb(0, 142, 255)",
-        "priority": 5,
+        "priority": 6,
         "schematic_color": "rgb(0, 142, 255)"
       },
       {
         "name": "GND",
         "pcb_color": "rgb(80, 80, 80)",
-        "priority": 6,
+        "priority": 7,
         "schematic_color": "rgb(80, 80, 80)"
       },
       {
         "name": "I2C",
         "pcb_color": "rgb(255, 214, 0)",
-        "priority": 4,
+        "priority": 5,
         "schematic_color": "rgb(255, 214, 0)"
       },
       {
         "name": "IMU_INT",
         "pcb_color": "rgb(32, 112, 26)",
-        "priority": 0,
+        "priority": 1,
         "schematic_color": "rgb(32, 112, 26)"
       },
       {
         "name": "LED",
         "pcb_color": "rgb(97, 255, 0)",
-        "priority": 3,
+        "priority": 4,
         "schematic_color": "rgb(97, 255, 0)"
       },
       {
         "name": "LSE",
         "pcb_color": "rgb(0, 255, 227)",
-        "priority": 1,
+        "priority": 2,
         "schematic_color": "rgb(0, 255, 227)"
       },
       {
         "name": "PWR",
         "pcb_color": "rgb(255, 55, 0)",
-        "priority": 7,
-        "schematic_color": "rgb(255, 55, 0)"
+        "priority": 8,
+        "schematic_color": "rgb(255, 55, 0)",
+        "track_width": 0.25
       },
       {
         "name": "SW",
         "pcb_color": "rgb(255, 0, 231)",
-        "priority": 2,
+        "priority": 3,
         "schematic_color": "rgb(255, 0, 231)"
       }
     ],
@@ -571,7 +578,7 @@
       },
       {
         "netclass": "LED",
-        "pattern": "LED*"
+        "pattern": "*LED*"
       },
       {
         "netclass": "SW",
@@ -584,6 +591,10 @@
       {
         "netclass": "IMU_INT",
         "pattern": "IMU_INT*"
+      },
+      {
+        "netclass": "ALSENS",
+        "pattern": "/ALSENS"
       }
     ]
   },
