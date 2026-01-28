@@ -2857,12 +2857,6 @@
 		(uuid "066fae94-a14f-4968-9fef-ecb3cbe5b7ad")
 	)
 	(junction
-		(at 71.12 58.42)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "10d36a2a-8133-4af2-a6e1-ae9a91127d62")
-	)
-	(junction
 		(at 97.79 182.88)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3422,16 +3416,6 @@
 	)
 	(wire
 		(pts
-			(xy 68.58 58.42) (xy 71.12 58.42)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "5d47bfa7-d349-4393-a7ae-2bd45d0da912")
-	)
-	(wire
-		(pts
 			(xy 101.6 154.94) (xy 106.68 154.94)
 		)
 		(stroke
@@ -3649,16 +3633,6 @@
 			(type default)
 		)
 		(uuid "870fd659-a616-4707-997b-88d90718bcad")
-	)
-	(wire
-		(pts
-			(xy 71.12 55.88) (xy 71.12 58.42)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "88d19a43-a585-4a3d-ba19-dd5585f16e3e")
 	)
 	(wire
 		(pts
@@ -4052,7 +4026,7 @@
 	)
 	(wire
 		(pts
-			(xy 71.12 58.42) (xy 77.47 58.42)
+			(xy 68.58 58.42) (xy 77.47 58.42)
 		)
 		(stroke
 			(width 0)
@@ -5079,7 +5053,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
 			(at 130.81 58.42 0)
 			(effects
 				(font
@@ -5265,73 +5239,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Connector:TestPoint_Small")
-		(at 71.12 55.88 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "097343ab-3fad-4d89-8775-e6a04e71c42f")
-		(property "Reference" "TP2"
-			(at 69.342 54.61 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "TestPoint_Small"
-			(at 72.39 57.1499 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-				(hide yes)
-			)
-		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
-			(at 76.2 55.88 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 76.2 55.88 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "test point"
-			(at 71.12 55.88 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "57a42ed7-66d9-41b6-80e4-07be6a2045dc")
-		)
-		(instances
-			(project "STM32_Watch"
-				(path "/1b502511-4b9c-43d1-bc6f-3ad66e0f6a7c"
-					(reference "TP2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "power:GND")
 		(at 92.71 101.6 0)
 		(unit 1)
@@ -5426,7 +5333,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
 			(at 130.81 88.9 0)
 			(effects
 				(font
@@ -5722,7 +5629,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
 			(at 130.81 86.36 0)
 			(effects
 				(font
@@ -7682,7 +7589,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
 			(at 130.81 60.96 0)
 			(effects
 				(font
@@ -8154,7 +8061,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
 			(at 64.77 30.48 0)
 			(effects
 				(font
@@ -8444,7 +8351,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
 			(at 93.98 100.33 0)
 			(effects
 				(font
@@ -9668,7 +9575,7 @@
 				(hide yes)
 			)
 		)
-		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
 			(at 68.58 49.53 0)
 			(effects
 				(font
