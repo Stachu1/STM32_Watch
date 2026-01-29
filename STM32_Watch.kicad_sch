@@ -5209,7 +5209,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "22683ac4-7ad5-4755-a29c-e7bf3356066c")
-		(property "Reference" "U3"
+		(property "Reference" "U2"
 			(at 103.7433 172.72 0)
 			(effects
 				(font
@@ -5309,7 +5309,7 @@
 		(instances
 			(project ""
 				(path "/1b502511-4b9c-43d1-bc6f-3ad66e0f6a7c"
-					(reference "U3")
+					(reference "U2")
 					(unit 1)
 				)
 			)
@@ -8598,7 +8598,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "de2754ac-38c2-4b5a-9e2f-3ed23e8f8b0b")
-		(property "Reference" "R7"
+		(property "Reference" "R5"
 			(at 53.34 91.44 0)
 			(effects
 				(font
@@ -8661,7 +8661,7 @@
 		(instances
 			(project "STM32_Watch"
 				(path "/1b502511-4b9c-43d1-bc6f-3ad66e0f6a7c"
-					(reference "R7")
+					(reference "R5")
 					(unit 1)
 				)
 			)
