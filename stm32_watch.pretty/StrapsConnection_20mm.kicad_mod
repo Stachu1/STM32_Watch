@@ -3,8 +3,6 @@
 	(generator "pcbnew")
 	(generator_version "9.0")
 	(layer "F.Cu")
-	(descr "Mounting Hole 2.2mm, no annular, M2")
-	(tags "mounting hole 2.2mm no annular m2")
 	(property "Reference" "REF**"
 		(at 0 -3.2 0)
 		(layer "F.SilkS")

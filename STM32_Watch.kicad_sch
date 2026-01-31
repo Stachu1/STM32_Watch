@@ -2769,6 +2769,12 @@
 		(uuid "a0a86d6e-3236-4e3d-8002-cfe5eecbaeb5")
 	)
 	(junction
+		(at 92.71 102.87)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "a3d4bc30-cd24-40bf-a87c-48e362ce1c40")
+	)
+	(junction
 		(at 92.71 34.29)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3390,7 +3396,17 @@
 	)
 	(wire
 		(pts
-			(xy 92.71 101.6) (xy 92.71 100.33)
+			(xy 88.9 102.87) (xy 92.71 102.87)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a173efa8-4634-4c3f-b8e0-d3ca4801cf25")
+	)
+	(wire
+		(pts
+			(xy 92.71 104.14) (xy 92.71 102.87)
 		)
 		(stroke
 			(width 0)
@@ -3447,6 +3463,16 @@
 			(type default)
 		)
 		(uuid "b071b390-26b4-4955-b6ab-71cfc277be3e")
+	)
+	(wire
+		(pts
+			(xy 92.71 102.87) (xy 92.71 100.33)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b2c948eb-f432-45f6-a6db-cbe6b4634872")
 	)
 	(wire
 		(pts
@@ -4924,7 +4950,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 92.71 101.6 0)
+		(at 92.71 104.14 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -4933,7 +4959,7 @@
 		(fields_autoplaced yes)
 		(uuid "0b814370-2dc1-49e4-b1a6-5f25f1629daa")
 		(property "Reference" "#PWR01"
-			(at 92.71 107.95 0)
+			(at 92.71 110.49 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4942,7 +4968,7 @@
 			)
 		)
 		(property "Value" "GND"
-			(at 92.71 106.68 0)
+			(at 92.71 109.22 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4951,7 +4977,7 @@
 			)
 		)
 		(property "Footprint" ""
-			(at 92.71 101.6 0)
+			(at 92.71 104.14 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4960,7 +4986,7 @@
 			)
 		)
 		(property "Datasheet" ""
-			(at 92.71 101.6 0)
+			(at 92.71 104.14 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4969,7 +4995,7 @@
 			)
 		)
 		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 92.71 101.6 0)
+			(at 92.71 104.14 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5051,6 +5077,71 @@
 			(project "STM32_Watch"
 				(path "/1b502511-4b9c-43d1-bc6f-3ad66e0f6a7c"
 					(reference "TP4")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint_Small")
+		(at 88.9 102.87 90)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "11778828-f1f7-476e-bf4f-af51f2b71859")
+		(property "Reference" "TP2"
+			(at 86.36 102.87 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "TestPoint_Small"
+			(at 88.9 100.33 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.5mm"
+			(at 88.9 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 88.9 97.79 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "test point"
+			(at 88.9 102.87 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "89d8a034-da7c-48b3-9769-ba161ad16673")
+		)
+		(instances
+			(project ""
+				(path "/1b502511-4b9c-43d1-bc6f-3ad66e0f6a7c"
+					(reference "TP2")
 					(unit 1)
 				)
 			)
@@ -5175,7 +5266,7 @@
 				(hide yes)
 			)
 		)
-		(property "LCSC" "C15850"
+		(property "LCSC" "C32635"
 			(at 66.04 38.1 0)
 			(effects
 				(font
@@ -5255,7 +5346,7 @@
 				(hide yes)
 			)
 		)
-		(property "LCSC" "C967633"
+		(property "LCSC" "C94048"
 			(at 101.6 157.48 0)
 			(effects
 				(font
@@ -7840,7 +7931,7 @@
 		(dnp no)
 		(uuid "bd3eecb2-c545-4191-8e24-f4610c5f1db4")
 		(property "Reference" "TP6"
-			(at 87.122 99.06 0)
+			(at 84.582 100.33 0)
 			(effects
 				(font
 					(size 1.27 1.27)
