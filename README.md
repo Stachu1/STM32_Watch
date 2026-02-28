@@ -19,8 +19,33 @@ The goal is to learn more about PCB desing, STM32 enviorment and low-power featu
 * Wake up from standby
 * Time can be set
 * Battery voltage can be checked
-* Brightnes can be checked (1 - 2 - 3 - auto)
+* Brightnes can be changed (1 - 2 - 3 - auto)
 * Particle sim with a single LED showing a particle that reacts to watch acceleration
 * MCU and IMU tmeperature can be checked
 
-### Finish Rev A by the end of March 2026
+
+### UI
+* BTN Upper - Brightness control / Confirm / Next
+* BTN Lower - Change Mode
+* Wake up - Wrist up / Tap / Double Tap / Button press
+
+#### Time Display
+* Hour - Solid, Minute - Slow Breathing, Second - Fast Breathing
+* BTN Upper -> Change brightness (1, 2, 3, auto)
+* BTN Lower -> Next mode (Stats)
+
+#### Stats
+* Battery voltage: VBAT[V] = 2 + LED_index / 10 (2V->3.2V)
+* Temperature: T[°C] = 5 * LED_index (0°C->60°C)
+* BTN Upper -> Next statistic
+* BTN Lower -> Next mode (Time Setting)
+
+#### Time Setting
+* H/M/S: Current H/M/S shown with a single LED. Can changed with the buttons
+* BTN Upper -> Configrm & Switch to the next variable. If seconds confirmed => Next mode (Particle Sim)
+* BTN Lower -> Increament current variable (hold for fast increment)
+
+#### Particle Sim (For fun)
+* Single LED reactive to watch accleration imitating physical particle
+* BTN Upper -> Change brightness (1, 2, 3, auto)
+* BTN Lower -> Next mode (Time Display)

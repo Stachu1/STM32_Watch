@@ -6,8 +6,6 @@
 
 void ResetHandler();
 void main();
-void put_char(u8 c);
-void print_u32(u32 num);
 
 void ISRStub(void) {
     while (1) {
