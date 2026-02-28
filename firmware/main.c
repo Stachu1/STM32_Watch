@@ -357,9 +357,6 @@ void ADC_Init(void)
     ADC->SMPR |= ADC_SMPR_SMPR_WIDTH;
 
     // Configure Oversampling (CFGR2)
-    // OVSR [2:0] = 111 (256x ratio)
-    // OVSS [3:0] = 0100 (Shift right by 4 bits to gain 4 bits of resolution)
-    // OVSE = 1 (Enable Oversampling)
     ADC->CFGR2 |= ADC_CFGR2_OVSE;
     ADC->CFGR2 |= (7 << ADC_CFGR2_OVSR_LSB);
     ADC->CFGR2 |= (8 << ADC_CFGR2_OVSS_LSB);
