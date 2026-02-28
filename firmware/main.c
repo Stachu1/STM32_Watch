@@ -5,9 +5,9 @@
 #define EVER (;;)
 #define SYSCLK 32000000
 #define BAUD 115200
-#define TS_CAL1 *((uint16_t*) 0x1FF8007A)
-#define TS_CAL2 *((uint16_t*) 0x1FF8007E)
-#define VREFINT_CAL *((uint16_t*) 0x1FF80078)
+#define TS_CAL1 *((u16*) 0x1FF8007A)
+#define TS_CAL2 *((u16*) 0x1FF8007E)
+#define VREFINT_CAL *((u16*) 0x1FF80078)
 #define IMU_ADDR 0x6A
 
 typedef struct {
@@ -49,16 +49,18 @@ void Print_i32(i32);
 u8 Ambient_Sense(void);
 void ADC_Init(void);
 void ADC_Deinit(void);
-u32 Get_Battery_Voltage(void);
-i32 Get_Core_Temperature(void);
+u32 ADC_Get_VDDA(void);
+i32 ADC_Get_Temp(void);
 void I2C_Init(void);
 void I2C_Write(u8, u8, u8*, u8);
 void I2C_Read(u8, u8, u8*, u8);
 void IMU_Init(void);
-void Get_Acceleration(i16*, i16*, i16*);
-i32 Get_IMU_Temperature(void);
-// TODO: RTC_Init
-// TODO: RTC_Set
+void IMU_Get_Accel(i16*, i16*, i16*);
+i32 IMU_Get_Temp(void);
+void RTC_Init(void);
+void RTC_Set_Time(u8, u8, u8);
+void RTC_Get_Time(u8*, u8*, u8*);
+
 // TODO: Sleep Mode
 // TODO: Button Interruptr
 // TODO: IMU Interrupts
@@ -72,32 +74,45 @@ void main(void)
     GPIO_Init();
     UART_Init();
     ADC_Init();
+    RTC_Init();
     I2C_Init();
     IMU_Init();
 
+
+    RTC_Set_Time(12, 59, 30);
     // LED_Set(0, 10);
     // u32 tick = 0;
 
     for EVER
     {
-        Delay_ms(100);
+        Delay_ms(500);
+        u8 h, m, s;
+        RTC_Get_Time(&h, &m, &s);
+        Print_str(">Time:");
+        Print_u32(h);
+        Print_char(':');
+        Print_u32(m);
+        Print_char(':');
+        Print_u32(s);
+        Print_str("\r\n");
+
         // i16 x, y, z;
         // x = 0;
-        // Get_Acceleration(&x, &y, &z);
+        // IMU_Get_Accel(&x, &y, &z);
         // Print_i32(x);
         // Print_char(' ');
         // Print_i32(y);
         // Print_char(' ');
 
         // Print_str(">VDDA:");
-        // Print_i32(Get_Battery_Voltage());
+        // Print_i32(ADC_Get_VDDA());
 
-        Print_str(">IMU_Temp:");
-        Print_i32(Get_IMU_Temperature());
-        Print_str(",Core_Temp:");
-        Print_i32(Get_Core_Temperature());
-        Print_char('\r');
-        Print_char('\n');
+        // Print_str(">IMU_Temp:");
+        // Print_i32(IMU_Get_Temp());
+        // Print_str(",Core_Temp:");
+        // Print_i32(ADC_Get_Temp());
+        // Print_char('\r');
+        // Print_char('\n');
         leds[0].port[6] |= (1 << leds[0].pin);
         Delay_ms(1);
         leds[0].port[6] |= (1 << (leds[0].pin + 16));
@@ -269,7 +284,7 @@ void Print_str(c *str)
     }
 }
 
-// Sends uint32 over UART
+// Sends u32 over UART
 void Print_u32(u32 num)
 {
     if (num == 0)
@@ -293,7 +308,7 @@ void Print_u32(u32 num)
     }
 }
 
-// Sends int32 over UART
+// Sends i32 over UART
 void Print_i32(i32 num)
 {
     if (num == 0)
@@ -356,10 +371,10 @@ void ADC_Init(void)
     ADC->CCR |= (ADC_CCR_TSEN | ADC_CCR_VREFEN);
     ADC->SMPR |= ADC_SMPR_SMPR_WIDTH;
 
-    // Configure Oversampling (CFGR2)
+    // Configure Oversampling x256 & 8 bit shift
     ADC->CFGR2 |= ADC_CFGR2_OVSE;
-    ADC->CFGR2 |= (7 << ADC_CFGR2_OVSR_LSB);
-    ADC->CFGR2 |= (8 << ADC_CFGR2_OVSS_LSB);
+    BF_SET(ADC->CFGR2, ADC_CFGR2_OVSR, 0x7);
+    BF_SET(ADC->CFGR2, ADC_CFGR2_OVSS, 0x8);
 
     // Enable ADC
     ADC->ISR |= ADC_ISR_ADRDY;
@@ -396,7 +411,7 @@ void ADC_Deinit(void)
 
 // Measures VDDA in mV
 // (Needs ADC_Init)
-u32 Get_Battery_Voltage(void)
+u32 ADC_Get_VDDA(void)
 {
     // Set Vref & Max conversion time
     ADC->CHSELR = ADC_CHSELR_CHSEL17;
@@ -411,10 +426,10 @@ u32 Get_Battery_Voltage(void)
 
 // Measures core temperature in m°C
 // (Needs ADC_Init)
-i32 Get_Core_Temperature(void)
+i32 ADC_Get_Temp(void)
 {
     // Get VDDA
-    u32 vdda_mV = Get_Battery_Voltage();
+    u32 vdda_mV = ADC_Get_VDDA();
 
     // Set Tsen & Max conversion time
     ADC->CHSELR = ADC_CHSELR_CHSEL18;
@@ -504,7 +519,7 @@ void I2C_Read(u8 addr, u8 reg, u8 *buff, u8 size)
     
     while (!(I2C1->ISR & I2C1_ISR_TXIS));
     I2C1->TXDR = reg;
-    while (!(I2C1->ISR & I2C1_ISR_TC)); // Wait for Transfer Complete
+    while (!(I2C1->ISR & I2C1_ISR_TC));
 
     // Restart and Read
     I2C1->CR2 = (addr << 1) | I2C1_CR2_RD_WRN | (size << 16) | I2C1_CR2_START | I2C1_CR2_AUTOEND;
@@ -527,7 +542,7 @@ void IMU_Init(void)
 }
 
 // Read acceleration from the IMU
-void Get_Acceleration(i16 *x, i16 *y, i16 *z)
+void IMU_Get_Accel(i16 *x, i16 *y, i16 *z)
 {
     u8 buff[6];
     I2C_Read(IMU_ADDR, 0x28, buff, 6);
@@ -537,12 +552,86 @@ void Get_Acceleration(i16 *x, i16 *y, i16 *z)
 }
 
 // Read temperature from the IMU in m°C
-i32 Get_IMU_Temperature(void)
+i32 IMU_Get_Temp(void)
 {
     u8 buff[2];
     I2C_Read(IMU_ADDR, 0x20, buff, 2);
 
     // Convert raw value to m°C
-    // 256 LSB/°C val=0 @25 °C =>  m°C = °C*1000 + ((°C/256) * 39 + 5) / 10 + 25000
+    // 256 LSB/°C val=0 @25°C =>  m°C = °C*1000 + ((°C/256) * 39 + 5) / 10 + 25000
     return (i32)buff[1] * 1000 + (buff[0] * 39 + 5) / 10 + 25000;
+}
+
+
+// Init RTC for timekeeping and sleep mode
+void RTC_Init(void)
+{
+    // Disable backup domain write protection
+    PWR->CR |= PWR_CR_DBP;
+
+    // Start LSE and wait until ready
+    if (!(RCC->CSR & RCC_CSR_LSERDY)) {
+        RCC->CSR |= RCC_CSR_LSEON;
+        while (!(RCC->CSR & RCC_CSR_LSERDY));
+    }
+
+    // Set LSE as RTC clock source
+    BF_SET(RCC->CSR, RCC_CSR_RTCSEL, 0x1);
+
+    // Enable RTC
+    RCC->CSR |= RCC_CSR_RTCEN;
+}
+
+// Set RTC time (12h format, hours max 12)
+void RTC_Set_Time(u8 hours, u8 minutes, u8 seconds)
+{
+    // Wait for RTC to be ready
+    RTC->ISR &= ~RTC_ISR_RSF;
+    while (!(RTC->ISR & RTC_ISR_RSF));
+
+    // Disable write protection
+    RTC->WPR = 0xCA;
+    RTC->WPR = 0x53;
+
+    // Enter initialization mode
+    RTC->ISR |= RTC_ISR_INIT;
+    while (!(RTC->ISR & RTC_ISR_INITF));
+
+    // Set RTC prescaler for 1Hz time base (LSE is 32.768 kHz)
+    BF_SET(RTC->PRER, RTC_PRER_PREDIV_A, 0x7F);
+    BF_SET(RTC->PRER, RTC_PRER_PREDIV_S, 0xFF);
+
+    // Set 12h format
+    RTC->CR |= RTC_CR_FMT;
+
+    // Set time in BCD format
+    u32 temp_tr = 0;
+    temp_tr |= ((hours / 10) << RTC_TR_HT_LSB) | ((hours % 10) << RTC_TR_HU_LSB);
+    temp_tr |= ((minutes / 10) << RTC_TR_MNT_LSB) | ((minutes % 10) << RTC_TR_MNU_LSB);
+    temp_tr |= ((seconds / 10) << RTC_TR_ST_LSB) | (seconds % 10);
+    RTC->TR = temp_tr;
+
+    // Exit initialization mode
+    RTC->ISR &= ~RTC_ISR_INIT;
+
+    // Wait for synchronization
+    RTC->ISR &= ~RTC_ISR_RSF; 
+    while (!(RTC->ISR & RTC_ISR_RSF));
+
+    // Enable write protection
+    RTC->WPR = 0xFF;
+}
+
+// Get RTC time
+void RTC_Get_Time(u8 *hours, u8 *minutes, u8 *seconds)
+{
+    // Wait for RTC to be ready
+    RTC->ISR &= ~RTC_ISR_RSF;
+    while (!(RTC->ISR & RTC_ISR_RSF));
+
+    // Read time
+    u32 tr = RTC->TR;
+    *hours = ((tr & RTC_TR_HT_MASK) >> RTC_TR_HT_LSB) * 10 + ((tr & RTC_TR_HU_MASK) >> RTC_TR_HU_LSB);
+    *minutes = ((tr & RTC_TR_MNT_MASK) >> RTC_TR_MNT_LSB) * 10 + ((tr & RTC_TR_MNU_MASK) >> RTC_TR_MNU_LSB);
+    *seconds = ((tr & RTC_TR_ST_MASK) >> RTC_TR_ST_LSB) * 10 + ((tr & RTC_TR_SU_MASK) >> RTC_TR_SU_LSB);
 }
