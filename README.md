@@ -1,5 +1,5 @@
 # STM32 Watch:
-This project is about maing a PCB watch that is based around an STM32, runs on a CR2032 battery, and displays time with 12 leds aranged in a circle. (Kinda like mechanical watches)
+This project is about maing a PCB watch that is based around an STM32, runs on a CR2032 battery, and displays time with 12 leds aranged in a circle. (Kinda like mechanical watches do)
 
 The goal is to learn more about PCB desing, STM32 enviorment and low-power features.
 
@@ -21,7 +21,6 @@ The goal is to learn more about PCB desing, STM32 enviorment and low-power featu
 * Battery voltage can be checked
 * Brightnes can be checked (1 - 2 - 3 - auto)
 * Particle sim with a single LED showing a particle that reacts to watch acceleration
-* Core tmeperature can be checked
-
+* MCU and IMU tmeperature can be checked
 
 ### Finish Rev A by the end of March 2026
