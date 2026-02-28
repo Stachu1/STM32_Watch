@@ -2,56 +2,57 @@
 
 # Editor / OS
 *~
-**.swp
-**.tmp
-**.bak
-**.orig
-**.rej
+**/*.swp
+**/*.tmp
+**/*.bak
+**/*.orig
+**/*.rej
 .DS_Store
 Thumbs.db
 
 # KiCad backups / autosaves
-**.kicad_pcb-bak
-**.kicad_pcb-bck
-**.kicad_sch-bak
-**.kicad_sch-bck
-**.sch~
-**.kicad_sch~
-**.autosave
+**/*.kicad_pcb-bak
+**/*.kicad_pcb-bck
+**/*.kicad_sch-bak
+**/*.kicad_sch-bck
+**/*.sch~
+**/*.kicad_sch~
+**/*.autosave
 
 # KiCad cache / library local files (can be regenerated)
-**fp-cache/
-**fp-info-cache
-**fp-lib-table
-**sym-lib-table
-**sym_cache/
-**cache/
+**/fp-cache/
+**/fp-info-cache
+**/fp-lib-table
+**/sym-lib-table
+**/sym_cache/
+**/cache/
 
 # 3D models and exported CAD files
-**.3dshapes/
-**.wrl
-**.step
-**.stp
-**.stl
-**.iges
+**/*.3dshapes/
+**/*.wrl
+**/*.step
+**/*.stp
+**/*.stl
+**/*.iges
 
-# Fabrication / generated outputs (usually not tracked)
+# Fabrication / generated outputs
 gerbers/
 fab/
 plots/
 export/
 pnp/
-manufacturing/
-**.gbr
-**.drl
-**.drls
-**.pos
-**.zip
+mfg/
+**/*.gbr
+**/*.drl
+**/*.drls
+**/*.pos
+**/*.zip
 
-# Project-local user prefs (if present)
-*.kicad_pro.user
+# C files
+**/*.o
+**/*.elf
+**/*.bin
+**/*build
 
-**.DS_Store%
 
-
-
+**/*.DS_Store%
