@@ -9,37 +9,56 @@
 #define TS_CAL2 *((u16*) 0x1FF8007E)
 #define VREFINT_CAL *((u16*) 0x1FF80078)
 #define IMU_ADDR 0x6A
+#define BRIGHTNESS_STEPS 16 // Should be a power of 2 for performance
+
 
 typedef struct {
-    u8 pwm;                 // PWM value for the LED (0 to 255)
-    volatile u32* port;     // Pointer to GPIO port (GPIOA, GPIOB, etc.)
-    u8 pin;                 // Pin number for the LED (e.g., 6 for PB6)
+    u8 new_value;           // New value to set the hand to (1->12 0 for off)
+    u8 value;               // Value of the hand (1-12 0 for off)
+    u8 brightness;          // Brightness of the hand (0-(BRIGHTNESS_STEPS-1))
+    u8 tick;                // Tick counter for breathing effect
+    u8 tick_div;            // Tick divider for breathing speed control
+    b8 fading_in;           // Whether the hand is currently fading in or out
+} Hand;
+
+typedef struct {
+    volatile u32* port;     // Pointer to GPIO port
+    u8 pin;                 // Pin number for the LED
 } LED;
 
 LED leds[] = {
-    {0, (volatile u32*)GPIOB, 6},   // LED 0: PB6
-    {0, (volatile u32*)GPIOB, 5},   // LED 1: PB5
-    {0, (volatile u32*)GPIOB, 3},   // LED 2: PB3
-    {0, (volatile u32*)GPIOA, 12},  // LED 3: PA12
-    {0, (volatile u32*)GPIOB, 2},   // LED 4: PB2
-    {0, (volatile u32*)GPIOA, 7},   // LED 5: PA7
-    {0, (volatile u32*)GPIOA, 6},   // LED 6: PA6
-    {0, (volatile u32*)GPIOA, 5},   // LED 7: PA5
-    {0, (volatile u32*)GPIOA, 4},   // LED 8: PA4
-    {0, (volatile u32*)GPIOA, 1},   // LED 9: PA1
-    {0, (volatile u32*)GPIOB, 8},   // LED 10: PB8
-    {0, (volatile u32*)GPIOB, 7}    // LED 11: PB7
+    {(volatile u32*)GPIOB, 5},   // LED 1: PB5
+    {(volatile u32*)GPIOB, 3},   // LED 2: PB3
+    {(volatile u32*)GPIOA, 12},  // LED 3: PA12
+    {(volatile u32*)GPIOB, 2},   // LED 4: PB2
+    {(volatile u32*)GPIOA, 7},   // LED 5: PA7
+    {(volatile u32*)GPIOA, 6},   // LED 6: PA6
+    {(volatile u32*)GPIOA, 5},   // LED 7: PA5
+    {(volatile u32*)GPIOA, 4},   // LED 8: PA4
+    {(volatile u32*)GPIOA, 1},   // LED 9: PA1
+    {(volatile u32*)GPIOB, 8},   // LED 10: PB8
+    {(volatile u32*)GPIOB, 7},   // LED 11: PB7
+    {(volatile u32*)GPIOB, 6}    // LED 12: PB6
 };
+
 const u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-u8 led_step = 0;
+
+Hand hands[3] = {
+    {1, 0, BRIGHTNESS_STEPS-1, 0, 0, true},     // Hour hand
+    {2, 0, 0, 0, 8, true},                      // Minute hand
+    {3, 0, 0, 0, 1, true}                       // Second hand
+};
+
+volatile u8 pwm_step = BRIGHTNESS_STEPS * 3;
+
 
 
 void Spin(u32);
 void Delay_us(u32);
 void Delay_ms(u32);
 void GPIO_Init(void);
-void LED_Set(u8, u8);
-void LED_Update(void);
+void LED_Init(void);
+void Hand_Set(u8, u8);
 void UART_Init(void);
 void UART_Deinit(void);
 void Print_char(u8);
@@ -60,6 +79,7 @@ i32 IMU_Get_Temp(void);
 void RTC_Init(void);
 void RTC_Set_Time(u8, u8, u8);
 void RTC_Get_Time(u8*, u8*, u8*);
+void RTC_Wakeup_Init(void);
 
 // TODO: Sleep Mode
 // TODO: Button Interruptr
@@ -72,29 +92,31 @@ void RTC_Get_Time(u8*, u8*, u8*);
 void main(void)
 {
     GPIO_Init();
+    LED_Init();
     UART_Init();
-    ADC_Init();
+    // ADC_Init();
     RTC_Init();
-    I2C_Init();
-    IMU_Init();
+    // I2C_Init();
+    // IMU_Init();
 
 
-    RTC_Set_Time(12, 59, 30);
-    // LED_Set(0, 10);
-    // u32 tick = 0;
+    RTC_Set_Time(1, 26, 0);
+    RTC_Wakeup_Init();
 
     for EVER
     {
         Delay_ms(500);
-        u8 h, m, s;
-        RTC_Get_Time(&h, &m, &s);
-        Print_str(">Time:");
-        Print_u32(h);
-        Print_char(':');
-        Print_u32(m);
-        Print_char(':');
-        Print_u32(s);
-        Print_str("\r\n");
+
+        // u8 h, m, s;
+        // RTC_Get_Time(&h, &m, &s);
+        // Print_str(">Time:");
+        // Print_u32(h);
+        // Print_char(':');
+        // Print_u32(m);
+        // Print_char(':');
+        // Print_u32(s);
+        // Print_str("\r\n");
+
 
         // i16 x, y, z;
         // x = 0;
@@ -113,14 +135,14 @@ void main(void)
         // Print_i32(ADC_Get_Temp());
         // Print_char('\r');
         // Print_char('\n');
-        leds[0].port[6] |= (1 << leds[0].pin);
-        Delay_ms(1);
-        leds[0].port[6] |= (1 << (leds[0].pin + 16));
+        // leds[11].port[6] |= (1 << leds[11].pin);
+        // Delay_ms(1);
+        // leds[11].port[6] |= (1 << (leds[11].pin + 16));
 
         // LED_Update();
         // Delay_us(10);
         
-        // if (led_step == 0) tick++;
+        // if (pwm_step == 0) tick++;
 
         // if (tick == 1000)
         // {
@@ -132,6 +154,99 @@ void main(void)
         // }
     }
 }
+
+// === ISR and Helper Functions ===
+
+// TIM21 Interrupt Handler for SW PWM control of LEDs
+void TIM21_IRQ_Handler(void)
+{
+    // Clear flag
+    TIM21->SR &= ~TIM21_SR_UIF;
+
+    // Begin new PWM cycle
+    pwm_step++;
+    if (pwm_step == BRIGHTNESS_STEPS * 3)
+    {
+        // Reset pwm_step
+        pwm_step = 0;
+        for (u8 i=0; i<3; i++)
+        {
+            // Update hand value to new_value (preventing ghosting when value changes mid hand time slot)
+            hands[i].value = hands[i].new_value;
+
+            // Skip if hand is static
+            if (hands[i].tick_div == 0) continue;
+
+            // Update tick and handle breathing effect
+            hands[i].tick++;
+            if (hands[i].tick == hands[i].tick_div)
+            {
+                // Reset tick and update brightness
+                hands[i].tick = 0;
+                if (hands[i].fading_in)
+                {
+                    // Increase brightness until max, then start fading out
+                    if (hands[i].brightness < BRIGHTNESS_STEPS - 1) hands[i].brightness++;
+                    else hands[i].fading_in = false;
+                }
+                else
+                {
+                    // Decrease brightness until min, then start fading in
+                    if (hands[i].brightness > 0) hands[i].brightness--;
+                    else hands[i].fading_in = true;
+                }
+            }
+        }
+    }
+
+    // Get hand index for the current time slot
+    u8 hand_idx = pwm_step / BRIGHTNESS_STEPS;
+    u8 local_step = pwm_step % BRIGHTNESS_STEPS;
+
+    // Turn on the LED for the current hand at the start of its brightness cycle
+    if (local_step == 0 && hands[hand_idx].value > 0 && hands[hand_idx].brightness > 0)
+    {
+        u8 led_on = hands[hand_idx].value - 1;
+        leds[led_on].port[6] = (1 << leds[led_on].pin);
+    }
+
+    // Turn off the LED for the current hand at the end of its brightness cycle
+    if (local_step >= hands[hand_idx].brightness && hands[hand_idx].value > 0)
+    {
+        u8 led_off = hands[hand_idx].value - 1;
+        leds[led_off].port[6] = (1 << (leds[led_off].pin + 16));
+    }
+}
+
+// 1Hz RTC Interrupt Handler for hands update
+void RTC_IRQ_Handler(void)
+{
+    // Clear EXTI Pending bit FIRST
+    EXTI->PR = EXTI_PR_PIF20;
+
+    // Check if Wakeup Timer caused the interrupt
+    if (RTC->ISR & RTC_ISR_WUTF) 
+    {
+        // Clear RTC Wakeup Flag
+        RTC->WPR = 0xCA;
+        RTC->WPR = 0x53;
+        RTC->ISR &= ~RTC_ISR_WUTF;
+        RTC->WPR = 0xFF; // Re-lock
+
+        // 3. Update Hand Logic
+        u8 h, m, s;
+        RTC_Get_Time(&h, &m, &s);
+
+        // Set hand new_values based on current time
+        if (h == 0 || h > 12) h = 12;
+        hands[0].new_value = h;
+        hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
+        hands[2].new_value = (s / 5 == 0) ? 12 : (s / 5); 
+    }
+}
+
+
+// === Utility Functions ===
 
 // Do nothing for 4 clock cyles
 void Spin(u32 count)
@@ -183,37 +298,29 @@ void GPIO_Init(void)
     BF_SET(GPIOB->MODER, GPIOB_MODER_MODE8, 0x1);   // PB8 as output
 }
 
-// Sets brightness for an LED
-// Only works if LED_Update is called frequently (~6kHz)
-void LED_Set(u8 index, u8 value)
+// Init TIM21 and enable its interrupt
+void LED_Init(void)
 {
-    if (index > 11) return;
-    leds[index].pwm = value;
+    // Enable TIM21 peripheral clock
+    RCC->APB2ENR |= RCC_APB2ENR_TIM21EN;
+
+    // Run at full 32MHz
+    TIM21->PSC = 0;
+    TIM21->ARR = 5333; // 32MHz / 5300 ~ 6kHz for LED PWM updates
+    
+    // Enable update interrupt and start counter
+    TIM21->DIER |= TIM21_DIER_UIE;
+    TIM21->CR1 |= TIM21_CR1_CEN;
+
+    // Enable TIM21 interrupt in NVIC
+    NVIC->ISER |= (1 << 20);
 }
 
-// 8-Bit SW PWM for controlling LEDs brightness with LED_Set
-// Should be call at ~6kHz
-void LED_Update(void)
+// Set the value of a hand (1-12, 0 for off)
+void Hand_Set(u8 hand_index, u8 value)
 {
-    for (u8 index=0; index<12; index++)
-    {
-        // Check if the LED should be ON
-        if (led_step == 0 && leds[index].pwm != 0)
-        {
-            // Turn LED ON (set pin high)
-            // +6 to go to BSRR reg
-            leds[index].port[6] |= (1 << leds[index].pin);  // Set pin high
-        }
-
-        // Check if the LED should be OFF
-        if (led_step == leds[index].pwm)
-        {
-            // Turn LED OFF (reset pin to low)
-            // +6 to go to BSRR reg +16 to access reset pin reg
-            leds[index].port[6] |= (1 << (leds[index].pin + 16));  // Reset pin (shift for BRx)
-        }
-    }
-    led_step++;
+    if (hand_index > 2) return;
+    hands[hand_index].new_value = value;
 }
 
 // Init UART at #BUAD
@@ -563,7 +670,7 @@ i32 IMU_Get_Temp(void)
 }
 
 
-// Init RTC for timekeeping and sleep mode
+// Init RTC for hand updates every second
 void RTC_Init(void)
 {
     // Disable backup domain write protection
@@ -587,7 +694,7 @@ void RTC_Set_Time(u8 hours, u8 minutes, u8 seconds)
 {
     // Wait for RTC to be ready
     RTC->ISR &= ~RTC_ISR_RSF;
-    while (!(RTC->ISR & RTC_ISR_RSF));
+    while (!(RTC->ISR & RTC_ISR_RSF)) Spin(10);
 
     // Disable write protection
     RTC->WPR = 0xCA;
@@ -595,7 +702,7 @@ void RTC_Set_Time(u8 hours, u8 minutes, u8 seconds)
 
     // Enter initialization mode
     RTC->ISR |= RTC_ISR_INIT;
-    while (!(RTC->ISR & RTC_ISR_INITF));
+    while (!(RTC->ISR & RTC_ISR_INITF)) Spin(10);
 
     // Set RTC prescaler for 1Hz time base (LSE is 32.768 kHz)
     BF_SET(RTC->PRER, RTC_PRER_PREDIV_A, 0x7F);
@@ -616,7 +723,7 @@ void RTC_Set_Time(u8 hours, u8 minutes, u8 seconds)
 
     // Wait for synchronization
     RTC->ISR &= ~RTC_ISR_RSF; 
-    while (!(RTC->ISR & RTC_ISR_RSF));
+    while (!(RTC->ISR & RTC_ISR_RSF)) Spin(10);
 
     // Enable write protection
     RTC->WPR = 0xFF;
@@ -627,11 +734,54 @@ void RTC_Get_Time(u8 *hours, u8 *minutes, u8 *seconds)
 {
     // Wait for RTC to be ready
     RTC->ISR &= ~RTC_ISR_RSF;
-    while (!(RTC->ISR & RTC_ISR_RSF));
+    while (!(RTC->ISR & RTC_ISR_RSF)) Spin(10);
 
     // Read time
     u32 tr = RTC->TR;
     *hours = ((tr & RTC_TR_HT_MASK) >> RTC_TR_HT_LSB) * 10 + ((tr & RTC_TR_HU_MASK) >> RTC_TR_HU_LSB);
     *minutes = ((tr & RTC_TR_MNT_MASK) >> RTC_TR_MNT_LSB) * 10 + ((tr & RTC_TR_MNU_MASK) >> RTC_TR_MNU_LSB);
     *seconds = ((tr & RTC_TR_ST_MASK) >> RTC_TR_ST_LSB) * 10 + ((tr & RTC_TR_SU_MASK) >> RTC_TR_SU_LSB);
+}
+
+// Enable RTC 1Hz interrupt for hand updates
+void RTC_Wakeup_Init(void)
+{
+    // Wait for RTC to be ready
+    RTC->ISR &= ~RTC_ISR_RSF;
+    while (!(RTC->ISR & RTC_ISR_RSF)) Spin(10);
+
+    // Disable Write Protection
+    RTC->WPR = 0xCA;
+    RTC->WPR = 0x53;
+
+    // Disable Wakeup Timer to configure it
+    RTC->CR &= ~RTC_CR_WUTE;
+
+    // Wait for access allowed
+    while (!(RTC->ISR & RTC_ISR_WUTWF)) Spin(10);
+
+    // Configure Clock Source for 1Hz
+    // WUCKSEL = 0b100 selects the 1Hz clock (RTCCLK div by prescalers)
+    RTC->CR &= ~(RTC_CR_WUCKSEL_MASK << RTC_CR_WUCKSEL_LSB);
+    RTC->CR |= (0x4 << RTC_CR_WUCKSEL_LSB);
+
+    // Clear Wakeup Timer flag and EXTI pending bit
+    RTC->ISR &= ~RTC_ISR_WUTF;
+    EXTI->PR = EXTI_PR_PIF20;
+
+    // For 1Hz clock, WUTR = 0 means 1 second interval (Interval = WUTR + 1)
+    RTC->WUTR = 0;
+
+    // Enable Interrupt and Timer
+    RTC->CR |= RTC_CR_WUTIE | RTC_CR_WUTE;
+
+    // Enable Write Protection
+    RTC->WPR = 0xFF;
+
+    // RTC Wakeup is connected to EXTI Line 20
+    EXTI->IMR |= (1 << 20);    // Interrupt Mask: Enable line 20
+    EXTI->RTSR |= (1 << 20);   // Rising Trigger: Enable
+
+    // Enable RTC global interrupt in NVIC
+    NVIC->ISER |= (1 << 2);
 }

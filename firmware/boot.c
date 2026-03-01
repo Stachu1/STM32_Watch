@@ -4,10 +4,12 @@
 
 
 
-void ResetHandler();
+void Reset_Handler();
+void RTC_IRQ_Handler(void);
+void TIM21_IRQ_Handler(void);
 void main();
 
-void ISRStub(void) {
+void ISR_Stub(void) {
     while (1) {
         __asm__ volatile ("wfi");
     }
@@ -19,26 +21,45 @@ extern u8 volatile _data_ram_end[];
 extern u8 volatile _data_ram[];
 extern u8 volatile _sbss[];
 extern u8 volatile _ebss[];
-extern u8 volatile ISR_Trampoline_Asm[];
 
 const u32 isr_vector[79] __attribute__((section(".isr_vector"))) = {
     (u32)_stack_top,
-    (u32)&ResetHandler,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
-    (u32)&ISRStub,
+    (u32)&Reset_Handler,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&RTC_IRQ_Handler,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&ISR_Stub,
+    (u32)&TIM21_IRQ_Handler
 };
 
 void BootPLL(void) {
@@ -78,7 +99,7 @@ void InitFlashData(void)
     }
 }
 
-void ResetHandler(void)
+void Reset_Handler(void)
 {
     InitFlashData();
     BootPLL();
