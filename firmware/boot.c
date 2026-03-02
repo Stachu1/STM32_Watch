@@ -7,6 +7,7 @@
 void Reset_Handler();
 void RTC_IRQ_Handler(void);
 void TIM21_IRQ_Handler(void);
+void EXTI0_1_IRQ_Handler(void);
 void main();
 
 void ISR_Stub(void) {
@@ -44,7 +45,7 @@ const u32 isr_vector[79] __attribute__((section(".isr_vector"))) = {
     (u32)&RTC_IRQ_Handler,
     (u32)&ISR_Stub,
     (u32)&ISR_Stub,
-    (u32)&ISR_Stub,
+    (u32)&EXTI0_1_IRQ_Handler,
     (u32)&ISR_Stub,
     (u32)&ISR_Stub,
     (u32)&ISR_Stub,

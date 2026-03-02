@@ -26,7 +26,18 @@ typedef struct {
     u8 pin;                 // Pin number for the LED
 } LED;
 
-LED leds[] = {
+typedef struct {
+    u32 press_start_time;
+    b8 is_pressed;
+} BTN;
+
+volatile Hand hands[3] = {
+    {1, 0, BRIGHTNESS_STEPS-1, 0, 0, true},     // Hour hand
+    {2, 0, 0, 0, 8, true},                      // Minute hand
+    {3, 0, 0, 0, 1, true}                       // Second hand
+};
+
+const volatile LED leds[] = {
     {(volatile u32*)GPIOB, 5},   // LED 1: PB5
     {(volatile u32*)GPIOB, 3},   // LED 2: PB3
     {(volatile u32*)GPIOA, 12},  // LED 3: PA12
@@ -41,16 +52,9 @@ LED leds[] = {
     {(volatile u32*)GPIOB, 6}    // LED 12: PB6
 };
 
-const u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-
-Hand hands[3] = {
-    {1, 0, BRIGHTNESS_STEPS-1, 0, 0, true},     // Hour hand
-    {2, 0, 0, 0, 8, true},                      // Minute hand
-    {3, 0, 0, 0, 1, true}                       // Second hand
-};
-
+const volatile u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+volatile BTN upper_btn, lower_btn;
 volatile u8 pwm_step = BRIGHTNESS_STEPS * 3;
-
 
 
 void Spin(u32);
@@ -80,11 +84,12 @@ void RTC_Init(void);
 void RTC_Set_Time(u8, u8, u8);
 void RTC_Get_Time(u8*, u8*, u8*);
 void RTC_Wakeup_Init(void);
+void BTN_Init(void);
 
-// TODO: Sleep Mode
 // TODO: Button Interruptr
 // TODO: IMU Interrupts
-// TODO: HW PWM for LEDs
+// TODO: Sleep Mode
+// TODO: UI for setting time and other features
 
 // TODO: Power and speed optimization
 
@@ -94,10 +99,11 @@ void main(void)
     GPIO_Init();
     LED_Init();
     UART_Init();
-    // ADC_Init();
+    ADC_Init();
     RTC_Init();
-    // I2C_Init();
-    // IMU_Init();
+    I2C_Init();
+    IMU_Init();
+    BTN_Init();
 
 
     RTC_Set_Time(1, 26, 0);
@@ -106,56 +112,16 @@ void main(void)
     for EVER
     {
         Delay_ms(500);
-
-        // u8 h, m, s;
-        // RTC_Get_Time(&h, &m, &s);
-        // Print_str(">Time:");
-        // Print_u32(h);
-        // Print_char(':');
-        // Print_u32(m);
-        // Print_char(':');
-        // Print_u32(s);
-        // Print_str("\r\n");
-
-
-        // i16 x, y, z;
-        // x = 0;
-        // IMU_Get_Accel(&x, &y, &z);
-        // Print_i32(x);
-        // Print_char(' ');
-        // Print_i32(y);
-        // Print_char(' ');
-
-        // Print_str(">VDDA:");
-        // Print_i32(ADC_Get_VDDA());
-
-        // Print_str(">IMU_Temp:");
-        // Print_i32(IMU_Get_Temp());
-        // Print_str(",Core_Temp:");
-        // Print_i32(ADC_Get_Temp());
-        // Print_char('\r');
-        // Print_char('\n');
-        // leds[11].port[6] |= (1 << leds[11].pin);
-        // Delay_ms(1);
-        // leds[11].port[6] |= (1 << (leds[11].pin + 16));
-
-        // LED_Update();
-        // Delay_us(10);
+        Print_str("elo\n");
         
-        // if (pwm_step == 0) tick++;
-
-        // if (tick == 1000)
-        // {
-        //     tick = 0;
-        //     leds[0].port[6] |= (1 << (leds[0].pin + 16));
-        //     LED_Set(0, Ambient_Sense());
-            // for (u32 i=0; i<12; i++) leds[i].port[6] |= (1 << (leds[i].pin + 16));
-            // leds[bright].port[6] |= (1 << leds[bright].pin);
-        // }
+        // Delay_ms(100);
+        // leds[0].port[6] = (1 << leds[0].pin);
+        // Delay_ms(1);
+        // leds[0].port[6] = (1 << (leds[0].pin + 16)); // Set LED Low
     }
 }
 
-// === ISR and Helper Functions ===
+// === ISR ===
 
 // TIM21 Interrupt Handler for SW PWM control of LEDs
 void TIM21_IRQ_Handler(void)
@@ -165,7 +131,7 @@ void TIM21_IRQ_Handler(void)
 
     // Begin new PWM cycle
     pwm_step++;
-    if (pwm_step == BRIGHTNESS_STEPS * 3)
+    if (pwm_step >= BRIGHTNESS_STEPS * 3)
     {
         // Reset pwm_step
         pwm_step = 0;
@@ -242,6 +208,21 @@ void RTC_IRQ_Handler(void)
         hands[0].new_value = h;
         hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
         hands[2].new_value = (s / 5 == 0) ? 12 : (s / 5); 
+    }
+}
+
+// EXTI Interrupt Handler for buttons
+void EXTI0_1_IRQ_Handler(void)
+{
+    u32 pending = EXTI->PR;
+
+    if (pending & (1 << 0)) {
+        EXTI->PR = (1 << 0); // Clear Line 0
+        leds[11].port[6] = (1 << leds[11].pin); // Set LED High
+    }
+    if (pending & (1 << 1)) {
+        EXTI->PR = (1 << 1); // Clear Line 1
+        leds[11].port[6] = (1 << (leds[11].pin + 16)); // Set LED Low
     }
 }
 
@@ -784,4 +765,31 @@ void RTC_Wakeup_Init(void)
 
     // Enable RTC global interrupt in NVIC
     NVIC->ISER |= (1 << 2);
+}
+
+// Buttons GPIO and interrupt init
+void BTN_Init(void)
+{
+    // Enable SYSCFG Clock
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+    // Configure PB0 and PB1 as Input
+    BF_SET(GPIOB->MODER, GPIOB_MODER_MODE0, 0x0);   // PB0 as input
+    BF_SET(GPIOB->MODER, GPIOB_MODER_MODE1, 0x0);   // PB1 as input
+
+    // Enable Internal Pull-Ups
+    BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD0, 0x1);
+    BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD1, 0x1);
+
+    // Map PB0 and PB1 to EXTI Line 0 and 1
+    SYSCFG_COMP->EXTICR1 &= ~(SYSCFG_COMP_EXTICR1_EXTI0_MASK | SYSCFG_COMP_EXTICR1_EXTI1_MASK);
+    SYSCFG_COMP->EXTICR1 |= ((1 << SYSCFG_COMP_EXTICR1_EXTI0_LSB) | (1 << SYSCFG_COMP_EXTICR1_EXTI1_LSB));
+
+    // Enable Rising and Falling Edge triggers
+    EXTI->FTSR |= (EXTI_FTSR_FT0 | EXTI_FTSR_FT1); // Press
+    EXTI->RTSR |= (EXTI_RTSR_RT0 | EXTI_RTSR_RT1); // Release
+    EXTI->IMR  |= (EXTI_IMR_IM0 | EXTI_IMR_IM1);   // Unmask
+
+    // Enable EXTI0_1 Interrupt (IRQ 5)
+    NVIC->ISER |= (1 << 5);
 }
