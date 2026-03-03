@@ -10,6 +10,8 @@
 #define VREFINT_CAL *((u16*) 0x1FF80078)
 #define IMU_ADDR 0x6A
 #define BRIGHTNESS_STEPS 16 // Should be a power of 2 for performance
+#define DEBOUNCE_TIME 150    // ms to debounce button presses
+#define STATS_FRAME_TIME 50  // ms between each frame in the stats animation
 
 
 typedef struct {
@@ -27,8 +29,8 @@ typedef struct {
 } LED;
 
 typedef struct {
-    u32 press_start_time;
-    b8 is_pressed;
+    b8 pressed;             // Button was pressed flag (set after release if press was valid)
+    u32 press_time;         // Time when the button was pressed (in ms)
 } BTN;
 
 volatile Hand hands[3] = {
@@ -53,15 +55,25 @@ const volatile LED leds[] = {
 };
 
 const volatile u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-volatile BTN upper_btn, lower_btn;
+volatile BTN btn_up, btn_down;
 volatile u8 pwm_step = BRIGHTNESS_STEPS * 3;
+volatile u32 millis = 0;
+volatile u8 sub_millis = 0;
+
+enum Mode {
+    MODE_TIME,
+    MODE_VOLTAGE,
+    MODE_TEMPERATURE,
+    MODE_TIME_SETTING,
+    MODE_PARTICLE_SIM
+} current_mode;
 
 
 void Spin(u32);
 void Delay_us(u32);
 void Delay_ms(u32);
 void GPIO_Init(void);
-void LED_Init(void);
+void TIM21_Init(void);
 void Hand_Set(u8, u8);
 void UART_Init(void);
 void UART_Deinit(void);
@@ -85,36 +97,36 @@ void RTC_Set_Time(u8, u8, u8);
 void RTC_Get_Time(u8*, u8*, u8*);
 void RTC_Wakeup_Init(void);
 void BTN_Init(void);
+void Mode_Handler(void);
+void Mode_Voltage_Handler(b8);
+void Mode_Temperature_Handler(b8);
+void Mode_Time_Setting_Handler(b8);
+void Mode_Particle_Sim_Handler(b8);
 
-// TODO: Button Interruptr
+// TODO: Particle simulation mode
 // TODO: IMU Interrupts
 // TODO: Sleep Mode
-// TODO: UI for setting time and other features
-
 // TODO: Power and speed optimization
 
 
 void main(void)
 {
     GPIO_Init();
-    LED_Init();
+    TIM21_Init();
     UART_Init();
     ADC_Init();
     RTC_Init();
     I2C_Init();
     IMU_Init();
     BTN_Init();
-
-
-    RTC_Set_Time(1, 26, 0);
     RTC_Wakeup_Init();
+
+    RTC_Set_Time(1, 15, 30);
 
     for EVER
     {
-        Delay_ms(500);
-        Print_str("elo\n");
-        
-        // Delay_ms(100);
+        Mode_Handler();
+
         // leds[0].port[6] = (1 << leds[0].pin);
         // Delay_ms(1);
         // leds[0].port[6] = (1 << (leds[0].pin + 16)); // Set LED Low
@@ -128,6 +140,14 @@ void TIM21_IRQ_Handler(void)
 {
     // Clear flag
     TIM21->SR &= ~TIM21_SR_UIF;
+
+    // Update millis
+    sub_millis++;
+    if (sub_millis == 6) // ~6 kHz / 6 ~= 1 kHz for millis update
+    {
+        sub_millis = 0;
+        millis++;
+    }
 
     // Begin new PWM cycle
     pwm_step++;
@@ -199,30 +219,59 @@ void RTC_IRQ_Handler(void)
         RTC->ISR &= ~RTC_ISR_WUTF;
         RTC->WPR = 0xFF; // Re-lock
 
-        // 3. Update Hand Logic
-        u8 h, m, s;
-        RTC_Get_Time(&h, &m, &s);
+        if (current_mode == MODE_TIME)
+        {
+            // Update Hand Logic
+            u8 h, m, s;
+            RTC_Get_Time(&h, &m, &s);
 
-        // Set hand new_values based on current time
-        if (h == 0 || h > 12) h = 12;
-        hands[0].new_value = h;
-        hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
-        hands[2].new_value = (s / 5 == 0) ? 12 : (s / 5); 
+            // Set hand new_values based on current time
+            hands[0].new_value = h;
+            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
+            hands[2].new_value = (s / 5 == 0) ? 12 : (s / 5); 
+        }
     }
 }
 
 // EXTI Interrupt Handler for buttons
 void EXTI0_1_IRQ_Handler(void)
 {
-    u32 pending = EXTI->PR;
-
-    if (pending & (1 << 0)) {
-        EXTI->PR = (1 << 0); // Clear Line 0
-        leds[11].port[6] = (1 << leds[11].pin); // Set LED High
+    // Check PB0 btn_down
+    if (EXTI->PR & (1 << 0))
+    {
+        if (!(GPIOB->IDR & (1 << 0)))
+        {
+            // LOW -> Falling Edge (PRESSED)
+            btn_down.press_time = millis;
+        }
+        else
+        {
+            // HIGH -> Rising Edge (RELEASED)
+            if (millis - btn_down.press_time >= DEBOUNCE_TIME)
+            {
+                btn_down.pressed = true;
+            }
+        }
+        EXTI->PR = (1 << 0); // Clear the flag
     }
-    if (pending & (1 << 1)) {
-        EXTI->PR = (1 << 1); // Clear Line 1
-        leds[11].port[6] = (1 << (leds[11].pin + 16)); // Set LED Low
+
+    // Check PB1 btn_up
+    if (EXTI->PR & (1 << 1))
+    {
+        if (!(GPIOB->IDR & (1 << 1)))
+        {
+            // LOW -> Falling Edge (PRESSED)
+            btn_up.press_time = millis;
+        }
+        else
+        {
+            // HIGH -> Rising Edge (RELEASED)
+            if (millis - btn_up.press_time >= DEBOUNCE_TIME)
+            {
+                btn_up.pressed = true;
+            }
+        }
+        EXTI->PR = (1 << 1); // Clear the flag
     }
 }
 
@@ -232,7 +281,7 @@ void EXTI0_1_IRQ_Handler(void)
 // Do nothing for 4 clock cyles
 void Spin(u32 count)
 {
-    while (count--) { __asm__ volatile ("nop"); }
+    while (count--) __asm__ volatile ("nop");
 }
 
 // Delay microseconds based on Spin 
@@ -280,14 +329,15 @@ void GPIO_Init(void)
 }
 
 // Init TIM21 and enable its interrupt
-void LED_Init(void)
+// for SW PWM control of the LEDs and ms couunting
+void TIM21_Init(void)
 {
     // Enable TIM21 peripheral clock
     RCC->APB2ENR |= RCC_APB2ENR_TIM21EN;
 
     // Run at full 32MHz
     TIM21->PSC = 0;
-    TIM21->ARR = 5333; // 32MHz / 5300 ~ 6kHz for LED PWM updates
+    TIM21->ARR = 5333; // 32MHz / 5333 ~ 6kHz for LED PWM updates
     
     // Enable update interrupt and start counter
     TIM21->DIER |= TIM21_DIER_UIE;
@@ -444,7 +494,8 @@ void ADC_Init(void)
     RCC->APB2ENR |= RCC_APB2ENR_ADCEN;
 
     // Disable ADC
-    if (ADC->CR & ADC_CR_ADEN) {
+    if (ADC->CR & ADC_CR_ADEN)
+    {
         ADC->CR |= ADC_CR_ADDIS;
         while (ADC->CR & ADC_CR_ADEN);
     }
@@ -476,15 +527,15 @@ void ADC_Deinit(void)
     // Stop ongoint conversions
     if (ADC->CR & ADC_CR_ADSTART)
     {
-    ADC->CR |= ADC_CR_ADSTP;
-    while (ADC->CR & ADC_CR_ADSTP);
+        ADC->CR |= ADC_CR_ADSTP;
+        while (ADC->CR & ADC_CR_ADSTP);
     }
 
     // Disable ADC
     if (ADC->CR & ADC_CR_ADEN)
     {
-    ADC->CR |= ADC_CR_ADDIS;
-    while (ADC->CR & ADC_CR_ADEN);
+        ADC->CR |= ADC_CR_ADDIS;
+        while (ADC->CR & ADC_CR_ADEN);
     }
 
     // Disable voltage references
@@ -584,7 +635,8 @@ void I2C_Write(u8 addr, u8 reg, u8 *data, u8 size)
     I2C1->TXDR = reg;
 
     // Transmit the data
-    for (u32 i = 0; i < size; i++) {
+    for (u32 i = 0; i < size; i++)
+    {
         while (!(I2C1->ISR & I2C1_ISR_TXIS));
         I2C1->TXDR = data[i];
     }
@@ -612,7 +664,8 @@ void I2C_Read(u8 addr, u8 reg, u8 *buff, u8 size)
     // Restart and Read
     I2C1->CR2 = (addr << 1) | I2C1_CR2_RD_WRN | (size << 16) | I2C1_CR2_START | I2C1_CR2_AUTOEND;
     
-    for (int i = 0; i < size; i++) {
+    for (int i = 0; i < size; i++)
+    {
         while (!(I2C1->ISR & I2C1_ISR_RXNE));
         buff[i] = I2C1->RXDR;
     }
@@ -658,7 +711,8 @@ void RTC_Init(void)
     PWR->CR |= PWR_CR_DBP;
 
     // Start LSE and wait until ready
-    if (!(RCC->CSR & RCC_CSR_LSERDY)) {
+    if (!(RCC->CSR & RCC_CSR_LSERDY))
+    {
         RCC->CSR |= RCC_CSR_LSEON;
         while (!(RCC->CSR & RCC_CSR_LSERDY));
     }
@@ -793,3 +847,234 @@ void BTN_Init(void)
     // Enable EXTI0_1 Interrupt (IRQ 5)
     NVIC->ISER |= (1 << 5);
 }
+
+// Handle mode changes and mode-specific logic
+void Mode_Handler(void)
+{
+    switch (current_mode)
+    {
+        case MODE_TIME:
+            if (btn_up.pressed)
+            {
+                btn_up.pressed = false;
+                Print_str("Changed brightness\n");
+            }
+            if (btn_down.pressed)
+            {
+                btn_down.pressed = false;
+                Print_str("Mode voltage\n");
+                current_mode = MODE_VOLTAGE;
+                Mode_Voltage_Handler(true);
+            }
+            break;
+        case MODE_VOLTAGE:
+            if (btn_up.pressed)
+            {
+                btn_up.pressed = false;
+                Print_str("Mode temperature\n");
+                current_mode = MODE_TEMPERATURE;
+                Mode_Temperature_Handler(true);
+            }
+            if (btn_down.pressed)
+            {
+                btn_down.pressed = false;
+                Print_str("Mode time setting entry\n");
+                current_mode = MODE_TIME_SETTING;
+                Mode_Time_Setting_Handler(true);
+            }
+            Mode_Voltage_Handler(false);
+            break;
+        case MODE_TEMPERATURE:
+            if (btn_up.pressed)
+            {
+                btn_up.pressed = false;
+                Print_str("Mode voltage\n");
+                current_mode = MODE_VOLTAGE;
+                Mode_Voltage_Handler(true);
+            }
+            if (btn_down.pressed)
+            {
+                btn_down.pressed = false;
+                Print_str("Mode time setting entry\n");
+                current_mode = MODE_TIME_SETTING;
+                Mode_Time_Setting_Handler(true);
+            }
+            Mode_Temperature_Handler(false);
+            break;
+        case MODE_TIME_SETTING:
+            Mode_Time_Setting_Handler(false);
+            break;
+        case MODE_PARTICLE_SIM:
+            if (btn_up.pressed)
+            {
+                btn_up.pressed = false;
+                Print_str("Changing brightness (some day)\n");
+            }
+            if (btn_down.pressed)
+            {
+                btn_down.pressed = false;
+                Print_str("Mode time\n");
+                current_mode = MODE_TIME;
+            }
+            break;
+    }
+}
+
+// Voltage mode: map battery voltage to hand position
+void Mode_Voltage_Handler(b8 reset)
+{
+    static u32 last_update = 0;
+    static u8 hand_idx = 0;
+
+    if (last_update == 0 || reset)
+    {
+        u32 vdda_mV = ADC_Get_VDDA();
+        Print_str("Battery Voltage: ");
+        Print_u32(vdda_mV);
+        Print_str(" mV\n");
+
+        // Map 2.0V-3.2V to 0-12 hand index (100mV per step)
+        hand_idx = ((vdda_mV - 2000) / 100);
+        if (hand_idx > 12) hand_idx = 12;
+        hands[0].new_value = 0;
+        hands[1].new_value = 0;
+        hands[2].new_value = 0;
+    }
+
+    // Update hand values gradually for smooth animation
+    if (millis - last_update >= STATS_FRAME_TIME)
+    {
+        last_update = millis;
+        if (hands[0].new_value < hand_idx)
+        {
+            hands[0].new_value++;
+        }
+    }
+}
+
+// Temperature mode: map IMU temperature to hand position
+void Mode_Temperature_Handler(b8 reset)
+{
+    static u32 last_update = 0;
+    static u8 hand_h_idx = 0;
+    static u8 hand_m_idx = 0;
+
+    if (last_update == 0 || reset)
+    {
+        u32 temp_mC = IMU_Get_Temp();
+        Print_str("IMU Temperature: ");
+        Print_u32(temp_mC);
+        Print_str(" mC\n");
+
+        // Map 0°C-60°C to 0-12 hand_h index (5°C per step)
+        // and 0.5°C per step for hand_m index
+        hand_h_idx = temp_mC / 5000;
+        hand_m_idx = (temp_mC - hand_h_idx * 5000) / 500;
+        if (hand_h_idx > 12) hand_h_idx = 12;
+        if (hand_m_idx > 12) hand_m_idx = 12;
+
+        hands[0].new_value = 0;
+        hands[1].new_value = 0;
+        hands[2].new_value = 0;
+    }
+
+    // Update hand values gradually for smooth animation
+    if (millis - last_update >= STATS_FRAME_TIME)
+    {
+        last_update = millis;
+        if (hands[0].new_value < hand_h_idx)
+        {
+            hands[0].new_value++;
+        }
+        if (hands[1].new_value < hand_m_idx)
+        {
+            hands[1].new_value++;
+        }
+    }
+}
+
+
+void Mode_Time_Setting_Handler(b8 reset)
+{
+    static u32 last_update = 0;
+    static enum {
+        ENTRY,
+        SET_HOURS,
+        SET_MINUTES,
+    } stage;
+    static u8 h = 0, m = 0;
+
+    if (reset)
+    {
+        // On entry, read RTC and round min down to nearest 5
+        stage = ENTRY;
+        hands[0].new_value = 0;
+        hands[1].new_value = 0;
+        hands[2].new_value = 0;
+    }
+
+    switch (stage)
+    {
+    case ENTRY:
+        if (millis - last_update >= STATS_FRAME_TIME / 2)
+        {
+            last_update = millis;
+            hands[0].new_value++;
+            if (hands[0].new_value > 12) hands[0].new_value = 1;
+        }
+        if (btn_up.pressed)
+        {
+            btn_up.pressed = false;
+            stage = SET_HOURS;
+            Print_str("Setting Hours\n");
+            h = 12;
+            hands[0].new_value = h;
+        }
+        if (btn_down.pressed)
+        {
+            btn_down.pressed = false;
+            current_mode = MODE_PARTICLE_SIM;
+        }
+        break;
+    case SET_HOURS:
+        if (btn_up.pressed)
+        {
+            btn_up.pressed = false;
+            stage = SET_MINUTES;
+            Print_str("Setting Minutes\n");
+            hands[0].new_value = 0;
+            m = 60;
+            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
+        }
+        if (btn_down.pressed)
+        {
+            btn_down.pressed = false;
+            h = (h == 12) ? 1 : h + 1;
+            hands[0].new_value = h;
+        }
+        break;
+    case SET_MINUTES:
+        if (btn_up.pressed)
+        {
+            btn_up.pressed = false;
+            current_mode = MODE_TIME;
+            RTC_Set_Time(h, m, 0);
+
+            // Set hand new_values based on current time
+            hands[0].new_value = h;
+            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
+            hands[2].new_value = 12; 
+            Print_str("Time Set\n");
+        }
+        if (btn_down.pressed)
+        {
+            btn_down.pressed = false;
+            m = (m > 55) ? 5 : m + 5;
+            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
+        }
+        break;
+    }
+}
+
+
+void Mode_Particle_Sim_Handler(b8);
