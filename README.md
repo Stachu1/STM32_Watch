@@ -42,8 +42,8 @@ The goal is to learn more about PCB desing, STM32 enviorment and low-power featu
 
 #### Time Setting
 * H/M/S: Current H/M/S shown with a single LED. Can changed with the buttons
-* BTN Upper -> Configrm & Switch to the next variable. If seconds confirmed => Next mode (Particle Sim)
-* BTN Lower -> Increament current variable (hold for fast increment)
+* BTN Upper -> Enter time setting / Confirm time & Switch to the next variable. If seconds confirmed => Time Display
+* BTN Lower -> Next mode (Particle Sim) / Increament current variable (hold for fast increment)
 
 #### Particle Sim (For fun)
 * Single LED reactive to watch accleration imitating physical particle
