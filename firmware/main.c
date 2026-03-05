@@ -8,11 +8,16 @@
 #define TS_CAL1 *((u16*) 0x1FF8007A)
 #define TS_CAL2 *((u16*) 0x1FF8007E)
 #define VREFINT_CAL *((u16*) 0x1FF80078)
+#define FIXED_SHIFT 16
+#define FIXED_ONE (1 << FIXED_SHIFT)
 #define IMU_ADDR 0x6A
 #define BRIGHTNESS_STEPS 16 // Should be a power of 2 for performance
 #define DEBOUNCE_TIME 150    // ms to debounce button presses
 #define STATS_FRAME_TIME 50  // ms between each frame in the stats animation
+#define PARTICLE_FRICTION 64225 // Friction applied to particles in particle sim mode (Q32)
 
+
+typedef i32 q32;
 
 typedef struct {
     u8 new_value;           // New value to set the hand to (1->12 0 for off)
@@ -54,6 +59,19 @@ const volatile LED leds[] = {
     {(volatile u32*)GPIOB, 6}    // LED 12: PB6
 };
 
+// Scaled by 65536 (Q16.16)
+// Values for 0, 5.6, 11.2... degrees
+const q32 SIN_LUT[64] = {
+    0, 6423, 12785, 19024, 25079, 30893, 36409, 41575,
+    46340, 50660, 54491, 57800, 60564, 62755, 64348, 65323,
+    65636, 65323, 64348, 62755, 60564, 57800, 54491, 50660,
+    46340, 41575, 36409, 30893, 25079, 19024, 12785, 6423,
+    0, -6423, -12785, -19024, -25079, -30893, -36409, -41575,
+    -46340, -50660, -54491, -57800, -60564, -62755, -64348, -65323,
+    -65636, -65323, -64348, -62755, -60564, -57800, -54491, -50660,
+    -46340, -41575, -36409, -30893, -25079, -19024, -12785, -6423
+};
+
 const volatile u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
 volatile BTN btn_up, btn_down;
 volatile u8 pwm_step = BRIGHTNESS_STEPS * 3;
@@ -81,6 +99,7 @@ void Print_char(u8);
 void Print_str(c*);
 void Print_u32(u32);
 void Print_i32(i32);
+void Print_q32(q32);
 u8 Ambient_Sense(void);
 void ADC_Init(void);
 void ADC_Deinit(void);
@@ -121,8 +140,11 @@ void main(void)
     BTN_Init();
     RTC_Wakeup_Init();
 
-    RTC_Set_Time(1, 15, 30);
+    RTC_Set_Time(6, 15, 30);
 
+    current_mode = MODE_PARTICLE_SIM;
+    Mode_Particle_Sim_Handler(true);
+    
     for EVER
     {
         Mode_Handler();
@@ -136,6 +158,7 @@ void main(void)
 // === ISR ===
 
 // TIM21 Interrupt Handler for SW PWM control of LEDs
+// (1.8% CPU | 3us ~ 96 cycles)
 void TIM21_IRQ_Handler(void)
 {
     // Clear flag
@@ -205,6 +228,7 @@ void TIM21_IRQ_Handler(void)
 }
 
 // 1Hz RTC Interrupt Handler for hands update
+// (5.25us ~ 168 cycles)
 void RTC_IRQ_Handler(void)
 {
     // Clear EXTI Pending bit FIRST
@@ -234,6 +258,7 @@ void RTC_IRQ_Handler(void)
 }
 
 // EXTI Interrupt Handler for buttons
+// (2us ~ 64 cycles)
 void EXTI0_1_IRQ_Handler(void)
 {
     // Check PB0 btn_down
@@ -474,6 +499,35 @@ void Print_i32(i32 num)
     }
 }
 
+// Sends q32 (q16.16) over UART
+void Print_q32(q32 num)
+{
+    if (num == 0)
+    {
+        Print_str("0.0000");
+        return;
+    }
+
+    if (num < 0)
+    {
+        Print_char('-');
+        num = -num;
+    }
+
+    u32 int_part = (u32)(num >> FIXED_SHIFT);
+    u32 frac_part = ((u32)(num & (FIXED_ONE - 1)) * 10000) >> FIXED_SHIFT;
+
+    Print_u32(int_part);
+    Print_char('.');
+
+    // Print leading zeros for the fraction
+    if (frac_part < 1000) Print_char('0');
+    if (frac_part < 100)  Print_char('0');
+    if (frac_part < 10)   Print_char('0');
+    
+    Print_u32(frac_part);
+}
+
 // Get Ambient light intensity
 // May take a while in low light (~500ms)
 u8 Ambient_Sense(void)
@@ -677,8 +731,9 @@ void I2C_Read(u8 addr, u8 reg, u8 *buff, u8 size)
 // Init the LSM6DSM IMU
 void IMU_Init(void)
 {
-    // Set Accel to 104Hz, +/- 2g (0x40 to CTRL1_XL)
-    u8 buf = 0x40;
+    // Set Accel to 208Hz, +/- 4g
+    // CTRL1_XL register (ODR_XL) (FS_XL)
+    u8 buf = (0x5 << 4) | (0x2 << 2);
     I2C_Write(IMU_ADDR, 0x10, &buf, 1);
 }
 
@@ -916,6 +971,7 @@ void Mode_Handler(void)
                 Print_str("Mode time\n");
                 current_mode = MODE_TIME;
             }
+            Mode_Particle_Sim_Handler(false);
             break;
     }
 }
@@ -926,7 +982,7 @@ void Mode_Voltage_Handler(b8 reset)
     static u32 last_update = 0;
     static u8 hand_idx = 0;
 
-    if (last_update == 0 || reset)
+    if (reset)
     {
         u32 vdda_mV = ADC_Get_VDDA();
         Print_str("Battery Voltage: ");
@@ -939,6 +995,7 @@ void Mode_Voltage_Handler(b8 reset)
         hands[0].new_value = 0;
         hands[1].new_value = 0;
         hands[2].new_value = 0;
+        return;
     }
 
     // Update hand values gradually for smooth animation
@@ -959,7 +1016,7 @@ void Mode_Temperature_Handler(b8 reset)
     static u8 hand_h_idx = 0;
     static u8 hand_m_idx = 0;
 
-    if (last_update == 0 || reset)
+    if (reset)
     {
         u32 temp_mC = IMU_Get_Temp();
         Print_str("IMU Temperature: ");
@@ -976,6 +1033,7 @@ void Mode_Temperature_Handler(b8 reset)
         hands[0].new_value = 0;
         hands[1].new_value = 0;
         hands[2].new_value = 0;
+        return;
     }
 
     // Update hand values gradually for smooth animation
@@ -1011,6 +1069,7 @@ void Mode_Time_Setting_Handler(b8 reset)
         hands[0].new_value = 0;
         hands[1].new_value = 0;
         hands[2].new_value = 0;
+        return;
     }
 
     switch (stage)
@@ -1034,6 +1093,7 @@ void Mode_Time_Setting_Handler(b8 reset)
         {
             btn_down.pressed = false;
             current_mode = MODE_PARTICLE_SIM;
+            Mode_Particle_Sim_Handler(true);
         }
         break;
     case SET_HOURS:
@@ -1076,5 +1136,60 @@ void Mode_Time_Setting_Handler(b8 reset)
     }
 }
 
+// Particle sim mode: display a simple particle simulation
+void Mode_Particle_Sim_Handler(b8 reset)
+{
+    static u32 last_update = 0;
+    static q32 alpha = 0;
+    static q32 omega = 0;
 
-void Mode_Particle_Sim_Handler(b8);
+    if (reset)
+    {
+        alpha = 0;
+        omega = 0;
+        hands[0].new_value = 0;
+        hands[1].new_value = 0;
+        hands[2].new_value = 0;
+        return;
+    }
+
+    // Update simulation every 10ms for smooth animation
+    if (millis - last_update >= 10)
+    {
+        u8 dt = (u8)(millis - last_update);
+        last_update = millis;
+
+        i16 raw_x, raw_y, raw_z;
+        IMU_Get_Accel(&raw_x, &raw_y, &raw_z);
+
+        // Convert raw accel (+/- 4g) to q32
+        q32 accel_x = (q32)raw_x << 3;
+        q32 accel_y = (q32)raw_y << 3;
+
+        // Scale down angle to fit 64 sin table
+        u8 table_idx = ((alpha >> FIXED_SHIFT)  & 0xFF) >> 2;
+
+        q32 sin_v = SIN_LUT[table_idx];
+        q32 cos_v = SIN_LUT[(table_idx + 16) & 63];
+
+        q32 accel_aligned = -(accel_x >> (FIXED_SHIFT / 2)) * (sin_v >> (FIXED_SHIFT / 2));
+        accel_aligned -= (accel_y >> (FIXED_SHIFT / 2)) * (cos_v >> (FIXED_SHIFT / 2));
+        omega += (accel_aligned * dt) >> 10;
+        omega = (omega * PARTICLE_FRICTION) >> FIXED_SHIFT;
+        alpha += (omega * dt) << 4;
+
+        Print_q32(alpha);
+        Print_str("\n");
+
+        // TODO: Fix roudning & Add comments discribing wtf is going on here
+        // Add 10.67 (256/12/2) for proper rounding
+        u32 hand_pos = alpha + 699051; 
+
+        // Map to 0-255
+        hand_pos = (hand_pos >> FIXED_SHIFT) & 0xFF;
+
+        // Mpa to 1-12 hand index (avoiding division)
+        hand_pos = ((hand_pos * 3) >> 6);
+        hands[0].new_value = (hand_pos == 0) ? 12 : hand_pos;
+    }
+}
