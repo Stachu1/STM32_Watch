@@ -11,10 +11,11 @@
 #define FIXED_SHIFT 16
 #define FIXED_ONE (1 << FIXED_SHIFT)
 #define IMU_ADDR 0x6A
-#define BRIGHTNESS_STEPS 16 // Should be a power of 2 for performance
-#define DEBOUNCE_TIME 150    // ms to debounce button presses
-#define STATS_FRAME_TIME 50  // ms between each frame in the stats animation
-#define PARTICLE_FRICTION 64225 // Friction applied to particles in particle sim mode (Q32)
+#define BRIGHTNESS_STEPS 16     // Should be a power of 2 for performance
+#define DEBOUNCE_TIME 150       // ms to debounce button presses
+#define STATS_FRAME_TIME 50     // ms between each frame in the stats animation
+#define PARTICLE_SIM_DT 8       // ms between each physics update in particle sim mode
+#define PARTICLE_FRICTION 650   // Friction applied to particles in particle sim mode (Q32)
 
 
 typedef i32 q32;
@@ -1140,7 +1141,7 @@ void Mode_Time_Setting_Handler(b8 reset)
 void Mode_Particle_Sim_Handler(b8 reset)
 {
     static u32 last_update = 0;
-    static q32 alpha = 0;
+    static q32 alpha = 0;   // Particle angle (q16.16 full circle is 0-255)
     static q32 omega = 0;
 
     if (reset)
@@ -1154,11 +1155,11 @@ void Mode_Particle_Sim_Handler(b8 reset)
     }
 
     // Update simulation every 10ms for smooth animation
-    if (millis - last_update >= 10)
+    if (millis - last_update >= PARTICLE_SIM_DT)
     {
-        u8 dt = (u8)(millis - last_update);
         last_update = millis;
 
+        // Get raw accel data from IMU
         i16 raw_x, raw_y, raw_z;
         IMU_Get_Accel(&raw_x, &raw_y, &raw_z);
 
@@ -1168,22 +1169,34 @@ void Mode_Particle_Sim_Handler(b8 reset)
 
         // Scale down angle to fit 64 sin table
         u8 table_idx = ((alpha >> FIXED_SHIFT)  & 0xFF) >> 2;
-
         q32 sin_v = SIN_LUT[table_idx];
         q32 cos_v = SIN_LUT[(table_idx + 16) & 63];
 
+        // Rotate accel vector by alpha to align with hand and apply as acceleration to omega
         q32 accel_aligned = -(accel_x >> (FIXED_SHIFT / 2)) * (sin_v >> (FIXED_SHIFT / 2));
         accel_aligned -= (accel_y >> (FIXED_SHIFT / 2)) * (cos_v >> (FIXED_SHIFT / 2));
-        omega += (accel_aligned * dt) >> 10;
-        omega = (omega * PARTICLE_FRICTION) >> FIXED_SHIFT;
-        alpha += (omega * dt) << 4;
 
-        Print_q32(alpha);
-        Print_str("\n");
+        // Integrate accel to get angular velocity
+        // Multiply by dt and 1/(2*Pi*r) ~= 11
+        // Divide by 1000 to convert ms to s.  
+        omega += (accel_aligned * PARTICLE_SIM_DT * 11) >> 10;
 
-        // TODO: Fix roudning & Add comments discribing wtf is going on here
-        // Add 10.67 (256/12/2) for proper rounding
-        u32 hand_pos = alpha + 699051; 
+        // Multiply by friction factor (0.98) to prevent runaway and add damping
+        omega -= (omega * PARTICLE_FRICTION) >> FIXED_SHIFT;
+
+        // Integrate omega to get angle
+        // Multiply by dt and divide by 1000 to convert ms to s
+        // Multiply by 256 to scale to full circle range (0-255)
+        alpha += (omega * PARTICLE_SIM_DT) >> 2;
+
+        // Print_str(">o:");
+        // Print_q32(omega);
+        // Print_str(",a:");
+        // Print_q32(alpha);
+        // Print_str("\r\n");
+
+        // Add 256/12/2 for proper rounding
+        u32 hand_pos = alpha + 699051;
 
         // Map to 0-255
         hand_pos = (hand_pos >> FIXED_SHIFT) & 0xFF;
