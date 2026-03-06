@@ -1141,7 +1141,7 @@ void Mode_Time_Setting_Handler(b8 reset)
 void Mode_Particle_Sim_Handler(b8 reset)
 {
     static u32 last_update = 0;
-    static q32 alpha = 0;   // Particle angle (q16.16 full circle is 0-255)
+    static q32 alpha = 0;
     static q32 omega = 0;
 
     if (reset)
@@ -1168,7 +1168,7 @@ void Mode_Particle_Sim_Handler(b8 reset)
         q32 accel_y = (q32)raw_y << 3;
 
         // Scale down angle to fit 64 sin table
-        u8 table_idx = ((alpha >> FIXED_SHIFT)  & 0xFF) >> 2;
+        u8 table_idx = (alpha >> (FIXED_SHIFT - 6))  & 63;
         q32 sin_v = SIN_LUT[table_idx];
         q32 cos_v = SIN_LUT[(table_idx + 16) & 63];
 
@@ -1178,7 +1178,7 @@ void Mode_Particle_Sim_Handler(b8 reset)
 
         // Integrate accel to get angular velocity
         // Multiply by dt and 1/(2*Pi*r) ~= 11
-        // Divide by 1000 to convert ms to s.  
+        // Divide by 1000 to convert ms to s
         omega += (accel_aligned * PARTICLE_SIM_DT * 11) >> 10;
 
         // Multiply by friction factor (0.98) to prevent runaway and add damping
@@ -1186,20 +1186,13 @@ void Mode_Particle_Sim_Handler(b8 reset)
 
         // Integrate omega to get angle
         // Multiply by dt and divide by 1000 to convert ms to s
-        // Multiply by 256 to scale to full circle range (0-255)
-        alpha += (omega * PARTICLE_SIM_DT) >> 2;
+        alpha += (omega * PARTICLE_SIM_DT) >> 10;
 
-        // Print_str(">o:");
-        // Print_q32(omega);
-        // Print_str(",a:");
-        // Print_q32(alpha);
-        // Print_str("\r\n");
-
-        // Add 256/12/2 for proper rounding
-        u32 hand_pos = alpha + 699051;
+        // Add 1/12/2 for proper rounding
+        u32 hand_pos = alpha + FIXED_ONE / 24;
 
         // Map to 0-255
-        hand_pos = (hand_pos >> FIXED_SHIFT) & 0xFF;
+        hand_pos = (hand_pos >> (FIXED_SHIFT - 8)) & 0xFF;
 
         // Mpa to 1-12 hand index (avoiding division)
         hand_pos = ((hand_pos * 3) >> 6);
