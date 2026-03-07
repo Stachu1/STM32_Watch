@@ -11,11 +11,13 @@
 #define FIXED_SHIFT 16
 #define FIXED_ONE (1 << FIXED_SHIFT)
 #define IMU_ADDR 0x6A
-#define BRIGHTNESS_STEPS 16     // Should be a power of 2 for performance
-#define DEBOUNCE_TIME 150       // ms to debounce button presses
+#define MAX_BRIGHTNESS_LEVEL 6  // 1 << MAX_BRIGHTNESS_LEVEL = BRIGHTNESS_STEPS
+#define MIN_BRIGHTNESS_LEVEL 3  // Lowest brightness level (too low causes flickering and instability in the effect)
+#define BRIGHTNESS_STEPS (1 << MAX_BRIGHTNESS_LEVEL) // Number of steps in the brightness control (Also changes frame rate)
+#define DEBOUNCE_TIME 50        // ms to debounce button presses
 #define STATS_FRAME_TIME 50     // ms between each frame in the stats animation
 #define PARTICLE_SIM_DT 8       // ms between each physics update in particle sim mode
-#define PARTICLE_FRICTION 650   // Friction applied to particles in particle sim mode (Q32)
+#define PARTICLE_FRICTION 330   // Friction applied to particles in particle sim mode (Q32)
 
 
 typedef i32 q32;
@@ -39,10 +41,10 @@ typedef struct {
     u32 press_time;         // Time when the button was pressed (in ms)
 } BTN;
 
-volatile Hand hands[3] = {
-    {1, 0, BRIGHTNESS_STEPS-1, 0, 0, true},     // Hour hand
-    {2, 0, 0, 0, 8, true},                      // Minute hand
-    {3, 0, 0, 0, 1, true}                       // Second hand
+Hand hands[3] = {
+    {1, 0, 0, 0, 0, true},  // Hour hand is static
+    {2, 0, 0, 0, 5, true},  // Minute hand oscillates with tick_div of 5
+    {3, 0, 0, 0, 1, true}   // Second hand oscillates with tick_div of 1
 };
 
 const volatile LED leds[] = {
@@ -60,8 +62,7 @@ const volatile LED leds[] = {
     {(volatile u32*)GPIOB, 6}    // LED 12: PB6
 };
 
-// Scaled by 65536 (Q16.16)
-// Values for 0, 5.6, 11.2... degrees
+// Sine LUT with 64 entries for 0-360 degrees (scaled to Q32)
 const q32 SIN_LUT[64] = {
     0, 6423, 12785, 19024, 25079, 30893, 36409, 41575,
     46340, 50660, 54491, 57800, 60564, 62755, 64348, 65323,
@@ -73,11 +74,12 @@ const q32 SIN_LUT[64] = {
     -46340, -41575, -36409, -30893, -25079, -19024, -12785, -6423
 };
 
-const volatile u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-volatile BTN btn_up, btn_down;
-volatile u8 pwm_step = BRIGHTNESS_STEPS * 3;
-volatile u32 millis = 0;
+const u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
+BTN btn_up, btn_down;
+volatile u32 pwm_step = BRIGHTNESS_STEPS * 3;
 volatile u8 sub_millis = 0;
+u32 millis = 0;
+u8 brightness_level = MAX_BRIGHTNESS_LEVEL;
 
 enum Mode {
     MODE_TIME,
@@ -116,6 +118,7 @@ void RTC_Init(void);
 void RTC_Set_Time(u8, u8, u8);
 void RTC_Get_Time(u8*, u8*, u8*);
 void RTC_Wakeup_Init(void);
+void RTC_Set_Hands(void);
 void BTN_Init(void);
 void Mode_Handler(void);
 void Mode_Voltage_Handler(b8);
@@ -123,7 +126,6 @@ void Mode_Temperature_Handler(b8);
 void Mode_Time_Setting_Handler(b8);
 void Mode_Particle_Sim_Handler(b8);
 
-// TODO: Particle simulation mode
 // TODO: IMU Interrupts
 // TODO: Sleep Mode
 // TODO: Power and speed optimization
@@ -141,10 +143,8 @@ void main(void)
     BTN_Init();
     RTC_Wakeup_Init();
 
-    RTC_Set_Time(6, 15, 30);
-
-    current_mode = MODE_PARTICLE_SIM;
-    Mode_Particle_Sim_Handler(true);
+    RTC_Set_Time(10, 15, 30);
+    RTC_Set_Hands();
     
     for EVER
     {
@@ -159,7 +159,7 @@ void main(void)
 // === ISR ===
 
 // TIM21 Interrupt Handler for SW PWM control of LEDs
-// (1.8% CPU | 3us ~ 96 cycles)
+// (1.8% CPU | 3us ~ 96 cycles @ 6kHz)
 void TIM21_IRQ_Handler(void)
 {
     // Clear flag
@@ -167,7 +167,7 @@ void TIM21_IRQ_Handler(void)
 
     // Update millis
     sub_millis++;
-    if (sub_millis == 6) // ~6 kHz / 6 ~= 1 kHz for millis update
+    if (sub_millis == 10) // ~10 kHz / 10 ~= 1 kHz for millis update
     {
         sub_millis = 0;
         millis++;
@@ -181,11 +181,23 @@ void TIM21_IRQ_Handler(void)
         pwm_step = 0;
         for (u8 i=0; i<3; i++)
         {
-            // Update hand value to new_value (preventing ghosting when value changes mid hand time slot)
-            hands[i].value = hands[i].new_value;
+            // Update hand value to new_value
+            // (prevents ghosting when hand value changes durring its time slot)
+            if (hands[i].new_value != 255)
+            {
+                hands[i].value = hands[i].new_value;    // Update hand value to new_value
+                hands[i].new_value = 255;               // Reset new_value
+                hands[i].brightness = 0;                // Reset brightness for breathing effect
+                hands[i].tick = 0;                      // Reset tick for breathing effect
+                hands[i].fading_in = true;              // Start fading in
+            }
 
-            // Skip if hand is static
-            if (hands[i].tick_div == 0) continue;
+            // Set brightness and continue if hand is static
+            if (hands[i].tick_div == 0)
+            {
+                hands[i].brightness = (1 << brightness_level);
+                continue;
+            };
 
             // Update tick and handle breathing effect
             hands[i].tick++;
@@ -193,17 +205,26 @@ void TIM21_IRQ_Handler(void)
             {
                 // Reset tick and update brightness
                 hands[i].tick = 0;
+                u8 b_step = (1 << (brightness_level - MIN_BRIGHTNESS_LEVEL));
                 if (hands[i].fading_in)
                 {
                     // Increase brightness until max, then start fading out
-                    if (hands[i].brightness < BRIGHTNESS_STEPS - 1) hands[i].brightness++;
-                    else hands[i].fading_in = false;
+                    if (hands[i].brightness + b_step > (1 << brightness_level))
+                    {
+                        hands[i].fading_in = false;
+                        hands[i].brightness -= b_step;
+                    }
+                    else hands[i].brightness += b_step;
                 }
                 else
                 {
                     // Decrease brightness until min, then start fading in
-                    if (hands[i].brightness > 0) hands[i].brightness--;
-                    else hands[i].fading_in = true;
+                    if (hands[i].brightness - b_step < 0)
+                    {
+                        hands[i].fading_in = true;
+                        hands[i].brightness += b_step;
+                    }
+                    else hands[i].brightness -= b_step;
                 }
             }
         }
@@ -213,11 +234,21 @@ void TIM21_IRQ_Handler(void)
     u8 hand_idx = pwm_step / BRIGHTNESS_STEPS;
     u8 local_step = pwm_step % BRIGHTNESS_STEPS;
 
-    // Turn on the LED for the current hand at the start of its brightness cycle
-    if (local_step == 0 && hands[hand_idx].value > 0 && hands[hand_idx].brightness > 0)
+    // Turn off previous hand LED and turn on the LED for the current hand at the start of its brightness cycle
+    if (local_step == 0)
     {
-        u8 led_on = hands[hand_idx].value - 1;
-        leds[led_on].port[6] = (1 << leds[led_on].pin);
+        u8 prev_hand_idx = (hand_idx == 0) ? 2 : hand_idx - 1;
+        if (hands[prev_hand_idx].value != 0)
+        {
+            u8 led_off = hands[prev_hand_idx].value - 1;
+            leds[led_off].port[6] = (1 << (leds[led_off].pin + 16));
+        }
+
+        if (hands[hand_idx].brightness > 0 && hands[hand_idx].value > 0)
+        {
+            u8 led_on = hands[hand_idx].value - 1;
+            leds[led_on].port[6] = (1 << leds[led_on].pin);
+        }
     }
 
     // Turn off the LED for the current hand at the end of its brightness cycle
@@ -246,14 +277,7 @@ void RTC_IRQ_Handler(void)
 
         if (current_mode == MODE_TIME)
         {
-            // Update Hand Logic
-            u8 h, m, s;
-            RTC_Get_Time(&h, &m, &s);
-
-            // Set hand new_values based on current time
-            hands[0].new_value = h;
-            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
-            hands[2].new_value = (s / 5 == 0) ? 12 : (s / 5); 
+            RTC_Set_Hands();
         }
     }
 }
@@ -363,7 +387,7 @@ void TIM21_Init(void)
 
     // Run at full 32MHz
     TIM21->PSC = 0;
-    TIM21->ARR = 5333; // 32MHz / 5333 ~ 6kHz for LED PWM updates
+    TIM21->ARR = 3200; // 32MHz / 3200 ~ 10kHz for LED PWM updates
     
     // Enable update interrupt and start counter
     TIM21->DIER |= TIM21_DIER_UIE;
@@ -374,9 +398,10 @@ void TIM21_Init(void)
 }
 
 // Set the value of a hand (1-12, 0 for off)
-void Hand_Set(u8 hand_index, u8 value)
+inline void Hand_Set(u8 hand_index, u8 value)
 {
-    if (hand_index > 2) return;
+    if (hand_index > 2 || value > 12) return;
+    if (hands[hand_index].new_value == value) return;
     hands[hand_index].new_value = value;
 }
 
@@ -834,7 +859,7 @@ void RTC_Get_Time(u8 *hours, u8 *minutes, u8 *seconds)
     *seconds = ((tr & RTC_TR_ST_MASK) >> RTC_TR_ST_LSB) * 10 + ((tr & RTC_TR_SU_MASK) >> RTC_TR_SU_LSB);
 }
 
-// Enable RTC 1Hz interrupt for hand updates
+// Enable RTC 0.2Hz interrupt for hand updates
 void RTC_Wakeup_Init(void)
 {
     // Wait for RTC to be ready
@@ -860,8 +885,8 @@ void RTC_Wakeup_Init(void)
     RTC->ISR &= ~RTC_ISR_WUTF;
     EXTI->PR = EXTI_PR_PIF20;
 
-    // For 1Hz clock, WUTR = 0 means 1 second interval (Interval = WUTR + 1)
-    RTC->WUTR = 0;
+    // For 0.2Hz clock, WUTR = 4 means 5 second interval (Interval = WUTR + 1)
+    RTC->WUTR = 4;
 
     // Enable Interrupt and Timer
     RTC->CR |= RTC_CR_WUTIE | RTC_CR_WUTE;
@@ -875,6 +900,18 @@ void RTC_Wakeup_Init(void)
 
     // Enable RTC global interrupt in NVIC
     NVIC->ISER |= (1 << 2);
+}
+
+// Update hand new_values based on current RTC time
+void RTC_Set_Hands(void)
+{
+    u8 h, m, s;
+    RTC_Get_Time(&h, &m, &s);
+
+    // Set hand new_values based on current time
+    Hand_Set(0, h);
+    Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
+    Hand_Set(2, (s / 5 == 0) ? 12 : (s / 5));
 }
 
 // Buttons GPIO and interrupt init
@@ -913,7 +950,9 @@ void Mode_Handler(void)
             if (btn_up.pressed)
             {
                 btn_up.pressed = false;
-                Print_str("Changed brightness\n");
+                Print_str("Changing brightness\n");
+                brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
+                RTC_Set_Hands();
             }
             if (btn_down.pressed)
             {
@@ -964,13 +1003,16 @@ void Mode_Handler(void)
             if (btn_up.pressed)
             {
                 btn_up.pressed = false;
-                Print_str("Changing brightness (some day)\n");
+                Print_str("Changing brightness\n");
+                brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
+                Hand_Set(0, hands[0].value);
             }
             if (btn_down.pressed)
             {
                 btn_down.pressed = false;
                 Print_str("Mode time\n");
                 current_mode = MODE_TIME;
+                RTC_Set_Hands();
             }
             Mode_Particle_Sim_Handler(false);
             break;
@@ -985,6 +1027,7 @@ void Mode_Voltage_Handler(b8 reset)
 
     if (reset)
     {
+        last_update = 0;
         u32 vdda_mV = ADC_Get_VDDA();
         Print_str("Battery Voltage: ");
         Print_u32(vdda_mV);
@@ -993,20 +1036,20 @@ void Mode_Voltage_Handler(b8 reset)
         // Map 2.0V-3.2V to 0-12 hand index (100mV per step)
         hand_idx = ((vdda_mV - 2000) / 100);
         if (hand_idx > 12) hand_idx = 12;
-        hands[0].new_value = 0;
-        hands[1].new_value = 0;
-        hands[2].new_value = 0;
+        Hand_Set(0, 1);
+        Hand_Set(1, 0);
+        Hand_Set(2, 0);
         return;
     }
 
+    // Wait for hands value to be pulled from new_value
+    if (hands[0].new_value != 255) last_update = millis;
+
     // Update hand values gradually for smooth animation
-    if (millis - last_update >= STATS_FRAME_TIME)
+    if (hands[0].value < hand_idx && millis - last_update >= STATS_FRAME_TIME)
     {
         last_update = millis;
-        if (hands[0].new_value < hand_idx)
-        {
-            hands[0].new_value++;
-        }
+        Hand_Set(0, hands[0].value + 1);
     }
 }
 
@@ -1019,6 +1062,7 @@ void Mode_Temperature_Handler(b8 reset)
 
     if (reset)
     {
+        last_update = 0;
         u32 temp_mC = IMU_Get_Temp();
         Print_str("IMU Temperature: ");
         Print_u32(temp_mC);
@@ -1031,23 +1075,26 @@ void Mode_Temperature_Handler(b8 reset)
         if (hand_h_idx > 12) hand_h_idx = 12;
         if (hand_m_idx > 12) hand_m_idx = 12;
 
-        hands[0].new_value = 0;
-        hands[1].new_value = 0;
-        hands[2].new_value = 0;
+        Hand_Set(0, 1);
+        Hand_Set(1, 1);
+        Hand_Set(2, 0);
         return;
     }
 
+    // Wait for hands value to be pulled from new_value
+    if (hands[0].new_value != 255) last_update = millis;
+
     // Update hand values gradually for smooth animation
-    if (millis - last_update >= STATS_FRAME_TIME)
+    if ((hands[0].value < hand_h_idx || hands[1].value < hand_m_idx) && millis - last_update >= STATS_FRAME_TIME)
     {
         last_update = millis;
-        if (hands[0].new_value < hand_h_idx)
+        if (hands[0].value < hand_h_idx)
         {
-            hands[0].new_value++;
+            Hand_Set(0, hands[0].value + 1);
         }
-        if (hands[1].new_value < hand_m_idx)
+        if (hands[1].value < hand_m_idx)
         {
-            hands[1].new_value++;
+            Hand_Set(1, hands[1].value + 1);
         }
     }
 }
@@ -1067,9 +1114,9 @@ void Mode_Time_Setting_Handler(b8 reset)
     {
         // On entry, read RTC and round min down to nearest 5
         stage = ENTRY;
-        hands[0].new_value = 0;
-        hands[1].new_value = 0;
-        hands[2].new_value = 0;
+        Hand_Set(0, 0);
+        Hand_Set(1, 0);
+        Hand_Set(2, 0);
         return;
     }
 
@@ -1079,8 +1126,7 @@ void Mode_Time_Setting_Handler(b8 reset)
         if (millis - last_update >= STATS_FRAME_TIME / 2)
         {
             last_update = millis;
-            hands[0].new_value++;
-            if (hands[0].new_value > 12) hands[0].new_value = 1;
+            Hand_Set(0, (hands[0].value == 12) ? 1 : hands[0].value + 1);
         }
         if (btn_up.pressed)
         {
@@ -1088,7 +1134,7 @@ void Mode_Time_Setting_Handler(b8 reset)
             stage = SET_HOURS;
             Print_str("Setting Hours\n");
             h = 12;
-            hands[0].new_value = h;
+            Hand_Set(0, h);
         }
         if (btn_down.pressed)
         {
@@ -1103,15 +1149,15 @@ void Mode_Time_Setting_Handler(b8 reset)
             btn_up.pressed = false;
             stage = SET_MINUTES;
             Print_str("Setting Minutes\n");
-            hands[0].new_value = 0;
+            Hand_Set(0, h);
             m = 60;
-            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
+            Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
         }
         if (btn_down.pressed)
         {
             btn_down.pressed = false;
             h = (h == 12) ? 1 : h + 1;
-            hands[0].new_value = h;
+            Hand_Set(0, h);
         }
         break;
     case SET_MINUTES:
@@ -1122,16 +1168,16 @@ void Mode_Time_Setting_Handler(b8 reset)
             RTC_Set_Time(h, m, 0);
 
             // Set hand new_values based on current time
-            hands[0].new_value = h;
-            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
-            hands[2].new_value = 12; 
+            Hand_Set(0, h);
+            Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
+            Hand_Set(2, 12);
             Print_str("Time Set\n");
         }
         if (btn_down.pressed)
         {
             btn_down.pressed = false;
             m = (m > 55) ? 5 : m + 5;
-            hands[1].new_value = (m / 5 == 0) ? 12 : (m / 5);
+            Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
         }
         break;
     }
@@ -1148,9 +1194,9 @@ void Mode_Particle_Sim_Handler(b8 reset)
     {
         alpha = 0;
         omega = 0;
-        hands[0].new_value = 0;
-        hands[1].new_value = 0;
-        hands[2].new_value = 0;
+        Hand_Set(0, 0);
+        Hand_Set(1, 0);
+        Hand_Set(2, 0);
         return;
     }
 
@@ -1196,6 +1242,6 @@ void Mode_Particle_Sim_Handler(b8 reset)
 
         // Mpa to 1-12 hand index (avoiding division)
         hand_pos = ((hand_pos * 3) >> 6);
-        hands[0].new_value = (hand_pos == 0) ? 12 : hand_pos;
+        Hand_Set(0, (hand_pos == 0) ? 12 : hand_pos);
     }
 }
