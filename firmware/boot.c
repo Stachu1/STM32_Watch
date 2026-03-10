@@ -8,6 +8,7 @@ void Reset_Handler();
 void RTC_IRQ_Handler(void);
 void TIM21_IRQ_Handler(void);
 void EXTI0_1_IRQ_Handler(void);
+void EXTI4_15_IRQ_Handler(void);
 void main();
 
 void ISR_Stub(void) {
@@ -47,7 +48,7 @@ const u32 isr_vector[79] __attribute__((section(".isr_vector"))) = {
     (u32)&ISR_Stub,
     (u32)&EXTI0_1_IRQ_Handler,
     (u32)&ISR_Stub,
-    (u32)&ISR_Stub,
+    (u32)&EXTI4_15_IRQ_Handler,
     (u32)&ISR_Stub,
     (u32)&ISR_Stub,
     (u32)&ISR_Stub,
@@ -64,7 +65,7 @@ const u32 isr_vector[79] __attribute__((section(".isr_vector"))) = {
 };
 
 void BootPLL(void) {
-    RCC->CR |= RCC_CR_HSI16ON;// | RCC_CR_HSI16OUTEN;
+    RCC->CR |= RCC_CR_HSI16ON;
     while (!(RCC->CR & RCC_CR_HSI16RDYF)) { __asm__ volatile ("nop"); }
 
     RCC->APB1ENR |= RCC_APB1ENR_PWREN;
@@ -84,7 +85,7 @@ void BootPLL(void) {
     while (!(RCC->CR & RCC_CR_PLLRDY)) { __asm__ volatile ("nop"); }
 
     BF_SET(RCC->CFGR, RCC_CFGR_SW, 3);
-    if (BF_GET(RCC->CFGR, RCC_CFGR_SWS) != 3) { __asm__ volatile ("nop"); }
+    while (BF_GET(RCC->CFGR, RCC_CFGR_SWS) != 3) { __asm__ volatile ("nop"); }
 }
 
 void InitFlashData(void)

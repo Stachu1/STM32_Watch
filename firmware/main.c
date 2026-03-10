@@ -11,13 +11,16 @@
 #define FIXED_SHIFT 16
 #define FIXED_ONE (1 << FIXED_SHIFT)
 #define IMU_ADDR 0x6A
-#define MAX_BRIGHTNESS_LEVEL 6  // 1 << MAX_BRIGHTNESS_LEVEL = BRIGHTNESS_STEPS
-#define MIN_BRIGHTNESS_LEVEL 3  // Lowest brightness level (too low causes flickering and instability in the effect)
+#define MAX_BRIGHTNESS_LEVEL 6      // 1 << MAX_BRIGHTNESS_LEVEL = BRIGHTNESS_STEPS
+#define MIN_BRIGHTNESS_LEVEL 3      // Lowest brightness level (too low causes flickering and instability in the effect)
 #define BRIGHTNESS_STEPS (1 << MAX_BRIGHTNESS_LEVEL) // Number of steps in the brightness control (Also changes frame rate)
-#define DEBOUNCE_TIME 50        // ms to debounce button presses
-#define STATS_FRAME_TIME 50     // ms between each frame in the stats animation
-#define PARTICLE_SIM_DT 8       // ms between each physics update in particle sim mode
-#define PARTICLE_FRICTION 330   // Friction applied to particles in particle sim mode (Q32)
+#define DEBOUNCE_TIME 50            // ms to debounce button presses
+#define STATS_FRAME_TIME 50         // ms between each frame in the stats animation
+#define PARTICLE_SIM_DT 8           // ms between each physics update in particle sim mode
+#define PARTICLE_FRICTION 330       // Friction applied to particles in particle sim mode (Q32)
+#define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
+#define STATISTIC_MODE_TIMEOUT 15000    // ms before switching entering Stope Mode from stats mode due to inactivity
+#define PARTICLE_SIM_INACTIVITY_SPEED 5500  // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
 
 
 typedef i32 q32;
@@ -79,6 +82,7 @@ BTN btn_up, btn_down;
 volatile u32 pwm_step = BRIGHTNESS_STEPS * 3;
 volatile u8 sub_millis = 0;
 u32 millis = 0;
+u32 last_activity = 0;
 u8 brightness_level = MAX_BRIGHTNESS_LEVEL;
 
 enum Mode {
@@ -125,9 +129,9 @@ void Mode_Voltage_Handler(b8);
 void Mode_Temperature_Handler(b8);
 void Mode_Time_Setting_Handler(b8);
 void Mode_Particle_Sim_Handler(b8);
+void Enter_Stop_Mode(void);
+void Restore_Clocks(void);
 
-// TODO: IMU Interrupts
-// TODO: Sleep Mode
 // TODO: Power and speed optimization
 
 
@@ -138,21 +142,24 @@ void main(void)
     UART_Init();
     ADC_Init();
     RTC_Init();
+    RTC_Wakeup_Init();
     I2C_Init();
     IMU_Init();
     BTN_Init();
-    RTC_Wakeup_Init();
 
     RTC_Set_Time(10, 15, 30);
     RTC_Set_Hands();
+
     
     for EVER
     {
         Mode_Handler();
 
-        // leds[0].port[6] = (1 << leds[0].pin);
-        // Delay_ms(1);
-        // leds[0].port[6] = (1 << (leds[0].pin + 16)); // Set LED Low
+        if ((current_mode != MODE_VOLTAGE && current_mode != MODE_TEMPERATURE &&
+            millis - last_activity > INACTIVITY_TIMEOUT) || (millis - last_activity > STATISTIC_MODE_TIMEOUT))
+        {
+            Enter_Stop_Mode();
+        }
     }
 }
 
@@ -237,12 +244,9 @@ void TIM21_IRQ_Handler(void)
     // Turn off previous hand LED and turn on the LED for the current hand at the start of its brightness cycle
     if (local_step == 0)
     {
-        u8 prev_hand_idx = (hand_idx == 0) ? 2 : hand_idx - 1;
-        if (hands[prev_hand_idx].value != 0)
-        {
-            u8 led_off = hands[prev_hand_idx].value - 1;
-            leds[led_off].port[6] = (1 << (leds[led_off].pin + 16));
-        }
+        // Turn off all LEDs
+        GPIOA->BSRR = 0b1000011110010 << 16;
+        GPIOB->BSRR = 0b111101100 << 16;
 
         if (hands[hand_idx].brightness > 0 && hands[hand_idx].value > 0)
         {
@@ -297,7 +301,7 @@ void EXTI0_1_IRQ_Handler(void)
         else
         {
             // HIGH -> Rising Edge (RELEASED)
-            if (millis - btn_down.press_time >= DEBOUNCE_TIME)
+            if (millis > btn_down.press_time && millis - btn_down.press_time >= DEBOUNCE_TIME)
             {
                 btn_down.pressed = true;
             }
@@ -316,15 +320,33 @@ void EXTI0_1_IRQ_Handler(void)
         else
         {
             // HIGH -> Rising Edge (RELEASED)
-            if (millis - btn_up.press_time >= DEBOUNCE_TIME)
+            if (millis > btn_up.press_time && millis - btn_up.press_time >= DEBOUNCE_TIME)
             {
                 btn_up.pressed = true;
             }
         }
         EXTI->PR = (1 << 1); // Clear the flag
     }
+    last_activity = millis;
 }
 
+// EXTI Interrupt Handler for IMU AWT & Double Tap
+void EXTI4_15_IRQ_Handler(void)
+{
+    // Check PA8 (INT2 - Wrist Tilt)
+    if (EXTI->PR & (1 << 8))
+    {
+        EXTI->PR = (1 << 8); // Clear the flag
+        Print_str("Wrist tilt detected\r\n");
+    }
+
+    // Check PA15 (INT1 - Double Tap)
+    if (EXTI->PR & (1 << 15))
+    {
+        EXTI->PR = (1 << 15); // Clear the flag
+    }
+    last_activity = millis;
+}
 
 // === Utility Functions ===
 
@@ -460,7 +482,7 @@ void UART_Deinit(void)
 // Sends char over UART
 void Print_char(u8 c)
 {
-    while (!(USART2->ISR & USART2_ISR_TXE));
+    while (!(USART2->ISR & USART2_ISR_TXE)) Spin(1);
     BF_SET(USART2->TDR, USART2_TDR_TDR, c);
 }
 
@@ -577,12 +599,12 @@ void ADC_Init(void)
     if (ADC->CR & ADC_CR_ADEN)
     {
         ADC->CR |= ADC_CR_ADDIS;
-        while (ADC->CR & ADC_CR_ADEN);
+        while (ADC->CR & ADC_CR_ADEN) Spin(1);
     }
 
     // Calibration
     ADC->CR |= ADC_CR_ADCAL;
-    while (ADC->CR & ADC_CR_ADCAL);
+    while (ADC->CR & ADC_CR_ADCAL) Spin(1);
 
     // Config ADC
     ADC->CFGR1 |= ADC_CFGR1_DISCEN;
@@ -598,7 +620,7 @@ void ADC_Init(void)
     // Enable ADC
     ADC->ISR |= ADC_ISR_ADRDY;
     ADC->CR |= ADC_CR_ADEN;
-    while (!(ADC->ISR & ADC_ISR_ADRDY));
+    while (!(ADC->ISR & ADC_ISR_ADRDY)) Spin(1);
 }
 
 // Deinit ADC
@@ -608,14 +630,14 @@ void ADC_Deinit(void)
     if (ADC->CR & ADC_CR_ADSTART)
     {
         ADC->CR |= ADC_CR_ADSTP;
-        while (ADC->CR & ADC_CR_ADSTP);
+        while (ADC->CR & ADC_CR_ADSTP) Spin(1);
     }
 
     // Disable ADC
     if (ADC->CR & ADC_CR_ADEN)
     {
         ADC->CR |= ADC_CR_ADDIS;
-        while (ADC->CR & ADC_CR_ADEN);
+        while (ADC->CR & ADC_CR_ADEN) Spin(1);
     }
 
     // Disable voltage references
@@ -635,9 +657,23 @@ u32 ADC_Get_VDDA(void)
     // Set Vref & Max conversion time
     ADC->CHSELR = ADC_CHSELR_CHSEL17;
 
+    // Turn off the LEDs to reduce voltage drop druring measurment
+    u8 h = hands[0].value;
+    u8 m = hands[1].value;
+    u8 s = hands[2].value;
+    Hand_Set(0, 0);
+    Hand_Set(1, 0);
+    Hand_Set(2, 0);
+
+    // Wait for hands to update
+    while (hands[2].new_value != 255) Spin(1);
     // Start ADC conversion, wait, read
     ADC->CR |= ADC_CR_ADSTART;
-    while (!(ADC->ISR & ADC_ISR_EOC));
+    while (!(ADC->ISR & ADC_ISR_EOC)) Spin(1);
+    Hand_Set(0, h);
+    Hand_Set(1, m);
+    Hand_Set(2, s);
+
     u32 raw_vref = (u32)(ADC->DR & ADC_DR_DATA_MASK);
     u32 vdda_mV = (3000 * VREFINT_CAL) / raw_vref;
     return vdda_mV;
@@ -655,7 +691,7 @@ i32 ADC_Get_Temp(void)
 
     // Start ADC conversion, wait, read
     ADC->CR |= ADC_CR_ADSTART;
-    while (!(ADC->ISR & ADC_ISR_EOC));
+    while (!(ADC->ISR & ADC_ISR_EOC)) Spin(1);
     u32 raw_tsen = (u32)(ADC->DR & ADC_DR_DATA_MASK);
     u32 tsen_cal =  raw_tsen * vdda_mV / 3000;
 
@@ -703,7 +739,7 @@ void I2C_Init(void)
 void I2C_Write(u8 addr, u8 reg, u8 *data, u8 size)
 {
     // Wait until I2C is not busy
-    while (I2C1->ISR & I2C1_ISR_BUSY);
+    while (I2C1->ISR & I2C1_ISR_BUSY) Spin(1);
 
     // Set address, number of bytes, and generate START
     I2C1->CR2 = (addr << 1);
@@ -711,18 +747,18 @@ void I2C_Write(u8 addr, u8 reg, u8 *data, u8 size)
     I2C1->CR2 |= I2C1_CR2_START | I2C1_CR2_AUTOEND;
 
     // Select the reg
-    while (!(I2C1->ISR & I2C1_ISR_TXIS));
+    while (!(I2C1->ISR & I2C1_ISR_TXIS)) Spin(1);
     I2C1->TXDR = reg;
 
     // Transmit the data
     for (u32 i = 0; i < size; i++)
     {
-        while (!(I2C1->ISR & I2C1_ISR_TXIS));
+        while (!(I2C1->ISR & I2C1_ISR_TXIS)) Spin(1);
         I2C1->TXDR = data[i];
     }
 
     // Wait for stop flag (set by AUTOEND)
-    while (!(I2C1->ISR & I2C1_ISR_STOPF));
+    while (!(I2C1->ISR & I2C1_ISR_STOPF)) Spin(1);
 
     // Clear stop flag
     I2C1->ICR |= I2C1_ICR_STOPCF;            
@@ -732,35 +768,98 @@ void I2C_Write(u8 addr, u8 reg, u8 *data, u8 size)
 void I2C_Read(u8 addr, u8 reg, u8 *buff, u8 size)
 {
     // Wait until I2C is not busy
-    while (I2C1->ISR & I2C1_ISR_BUSY);
+    while (I2C1->ISR & I2C1_ISR_BUSY) Spin(1);
 
     I2C1->CR2 = (addr << 1) | (1 << 16); // NBYTES = 1
     I2C1->CR2 |= I2C1_CR2_START; 
     
-    while (!(I2C1->ISR & I2C1_ISR_TXIS));
+    while (!(I2C1->ISR & I2C1_ISR_TXIS)) Spin(1);
     I2C1->TXDR = reg;
-    while (!(I2C1->ISR & I2C1_ISR_TC));
+    while (!(I2C1->ISR & I2C1_ISR_TC)) Spin(1);
 
     // Restart and Read
     I2C1->CR2 = (addr << 1) | I2C1_CR2_RD_WRN | (size << 16) | I2C1_CR2_START | I2C1_CR2_AUTOEND;
     
     for (int i = 0; i < size; i++)
     {
-        while (!(I2C1->ISR & I2C1_ISR_RXNE));
+        while (!(I2C1->ISR & I2C1_ISR_RXNE)) Spin(1);
         buff[i] = I2C1->RXDR;
     }
 
-    while (!(I2C1->ISR & I2C1_ISR_STOPF));
+    while (!(I2C1->ISR & I2C1_ISR_STOPF)) Spin(1);
     I2C1->ICR |= I2C1_ICR_STOPCF;
 }
 
 // Init the LSM6DSM IMU
 void IMU_Init(void)
 {
-    // Set Accel to 208Hz, +/- 4g
+    // === Set Accel to 416Hz, +/- 4g ===
     // CTRL1_XL register (ODR_XL) (FS_XL)
-    u8 buf = (0x5 << 4) | (0x2 << 2);
+    u8 buf = (0x6 << 4) | (0x2 << 2);
     I2C_Write(IMU_ADDR, 0x10, &buf, 1);
+
+    // === Enables double tap detection ===
+    // TAP_CFG register (INTERRUPTS_ENABLE) (TAP_X_EN:TAP_Y_EN:TAP_Z_EN)
+    buf = (0x1 << 7) | (0x7 << 1);
+    I2C_Write(IMU_ADDR, 0x58, &buf, 1);
+    // Configure double tap, detection threshold and time
+    // TAP_THS_6D register (TAP_THS4:0)
+    buf = 0xC;
+    I2C_Write(IMU_ADDR, 0x59, &buf, 1);
+    // INT_DUR2 register (DUR3:0) (QUIET1:0) (SHOCK1:0)
+    buf = (0x5 << 4) | (0x0 << 2) | (0x1);
+    I2C_Write(IMU_ADDR, 0x5A, &buf, 1);
+    // WAKE_UP_THS register (SINGLE_DOUBLE_TAP)
+    buf = (0x1 << 7);
+    I2C_Write(IMU_ADDR, 0x5B, &buf, 1);
+
+    // // === Enable absolute wrist tilt detection == 
+    // // CTRL10_C register (WRIST_TILT_EN) (FUNC_EN)
+    // buf = (0x1 << 7) | (0x1 << 2);
+    // I2C_Write(IMU_ADDR, 0x19, &buf, 1);
+    // // Enable embedded functions register
+    // // FUNC_CFG_ACCESS (FUNC_CFG_EN) ( FUNC_CFG_EN_B)
+    // buf = (0x1 << 7) | (0x1 << 5);
+    // I2C_Write(IMU_ADDR, 0x01, &buf, 1);
+
+    // // Set wrist til mask register to -X | +Z
+    // // A_WRIST_TILT_Mask register (WRIST_TILT_MASK_ Xneg) (WRIST_TILT_MASK_ Zpos)
+    // buf = (0x1 << 6) | (0x1 << 3);
+    // I2C_Write(IMU_ADDR, 0x59, &buf, 1);
+    // /// Disable embedded functions register
+    // buf = 0x00;
+    // I2C_Write(IMU_ADDR, 0x01, &buf, 1);
+
+    // // === Interrupt routing ===
+    // // MD1_CFG register (INT1_DOUBLE_TAP)
+    // buf = (0x1 << 3);
+    // I2C_Write(IMU_ADDR, 0x5E, &buf, 1);
+    // // DRDY_PULSE_CFG register (DRDY_PULSED) (INT2_WRIST_TILT)
+    // buf = 0x1;
+    I2C_Write(IMU_ADDR, 0x0B, &buf, 1);
+
+    // TODO: Remove the two lines line below
+    // Set INT1/2 to active low because The INT1 is shorted to VCC (bad soldering on the first prototype)
+    I2C_Write(IMU_ADDR, 0x12, (u8[]){(0x1 << 5) | (0x1 << 2)}, 1);
+
+    // // === Setupt MCU interrupts for IMU events ===
+    // // Enable SYSCFG Clock
+    // RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+
+    // // Configure PA8 and PA15 as Input
+    // BF_SET(GPIOA->MODER, GPIOA_MODER_MODE8, 0x0);
+    // BF_SET(GPIOA->MODER, GPIOA_MODER_MODE15, 0x0);
+
+    // // Map PA8 and PA15 to EXTI Line 8 and 15
+    // BF_SET(SYSCFG_COMP->EXTICR3, SYSCFG_COMP_EXTICR3_EXTI8, 0x0);
+    // BF_SET(SYSCFG_COMP->EXTICR4, SYSCFG_COMP_EXTICR4_EXTI15, 0x0);
+
+    // // Enable Rising Edge triggers
+    // EXTI->RTSR |= (EXTI_RTSR_RT8 | EXTI_RTSR_RT15);
+    // EXTI->IMR  |= (EXTI_IMR_IM8 | EXTI_IMR_IM15);
+
+    // // Enable EXTI4_15 Interrupt (IRQ 7)
+    // NVIC->ISER |= (1 << 7);
 }
 
 // Read acceleration from the IMU
@@ -795,7 +894,7 @@ void RTC_Init(void)
     if (!(RCC->CSR & RCC_CSR_LSERDY))
     {
         RCC->CSR |= RCC_CSR_LSEON;
-        while (!(RCC->CSR & RCC_CSR_LSERDY));
+        while (!(RCC->CSR & RCC_CSR_LSERDY)) Spin(10);
     }
 
     // Set LSE as RTC clock source
@@ -895,8 +994,8 @@ void RTC_Wakeup_Init(void)
     RTC->WPR = 0xFF;
 
     // RTC Wakeup is connected to EXTI Line 20
-    EXTI->IMR |= (1 << 20);    // Interrupt Mask: Enable line 20
-    EXTI->RTSR |= (1 << 20);   // Rising Trigger: Enable
+    EXTI->IMR |= EXTI_IMR_IM20;    // Interrupt Mask: Enable line 20
+    EXTI->RTSR |= EXTI_RTSR_RT20;   // Rising Trigger: Enable
 
     // Enable RTC global interrupt in NVIC
     NVIC->ISER |= (1 << 2);
@@ -1243,5 +1342,63 @@ void Mode_Particle_Sim_Handler(b8 reset)
         // Mpa to 1-12 hand index (avoiding division)
         hand_pos = ((hand_pos * 3) >> 6);
         Hand_Set(0, (hand_pos == 0) ? 12 : hand_pos);
+
+        if (omega > PARTICLE_SIM_INACTIVITY_SPEED || -omega > PARTICLE_SIM_INACTIVITY_SPEED)
+        {
+            last_activity = millis;
+        }
     }
+}
+
+// Enter Stop Mode for deep sleep with low power consumption
+void Enter_Stop_Mode(void)
+{
+    // Disable RTC wakeup timer
+    EXTI->IMR &= ~EXTI_IMR_IM20;
+
+    // Reset Hands
+    Hand_Set(0, 0); 
+    Hand_Set(1, 0);
+    Hand_Set(2, 0);
+    while (hands[2].new_value != 255) Spin(1);
+
+    // PWR Control: LPSDSR (Low-power regulator) + Clear PDDS (Stop Mode)
+    PWR->CR |= (1 << 0);  
+    PWR->CR &= ~(1 << 1); 
+
+    // Set SLEEPDEEP bit in System Control Register
+    SCB->SCR |= SCB_SCR_SLEEPDEEP;
+
+    // Clear Wakeup Flag (WUF)
+    PWR->CR |= (1 << 3);
+
+    // Wait For Interrupt
+    __asm volatile ("wfi");
+
+    // Restore clocks and reconfigure peripherals after waking up
+    Restore_Clocks();
+    millis = 0;
+    last_activity = 0;
+    current_mode = MODE_TIME;
+
+    // Re-enable RTC wakeup interrupt and update hands to current time
+    EXTI->IMR |= EXTI_IMR_IM20;
+    RTC_Set_Hands();
+}
+
+// Restore clock settings after waking up from Stop Mode
+void Restore_Clocks(void) {
+    // Restart HSI16
+    RCC->CR |= RCC_CR_HSI16ON;
+    while (!(RCC->CR & RCC_CR_HSI16RDYF)) Spin(1);
+
+    // Restart the PLL 
+    RCC->CR |= RCC_CR_PLLON;
+    while (!(RCC->CR & RCC_CR_PLLRDY)) Spin(1);
+
+    // Switch System Clock back to PLL
+    BF_SET(RCC->CFGR, RCC_CFGR_SW, 3);
+    
+    // Wait for switch to complete
+    while (BF_GET(RCC->CFGR, RCC_CFGR_SWS) != 3) Spin(1);
 }
