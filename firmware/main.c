@@ -10,17 +10,17 @@
 #define VREFINT_CAL *((u16*) 0x1FF80078)
 #define FIXED_SHIFT 16
 #define FIXED_ONE (1 << FIXED_SHIFT)
-#define IMU_ADDR 0x6A
+#define IMU_ADDR 0x6A               // I2C address of the LSM6DSM IMU (SA0 pulled low)
 #define MAX_BRIGHTNESS_LEVEL 6      // 1 << MAX_BRIGHTNESS_LEVEL = BRIGHTNESS_STEPS
 #define MIN_BRIGHTNESS_LEVEL 3      // Lowest brightness level (too low causes flickering and instability in the effect)
 #define BRIGHTNESS_STEPS (1 << MAX_BRIGHTNESS_LEVEL) // Number of steps in the brightness control (Also changes frame rate)
 #define DEBOUNCE_TIME 50            // ms to debounce button presses
 #define STATS_FRAME_TIME 50         // ms between each frame in the stats animation
-#define PARTICLE_SIM_DT 8           // ms between each physics update in particle sim mode
-#define PARTICLE_FRICTION 330       // Friction applied to particles in particle sim mode (Q32)
+#define PENDULUM_SIM_DT 8           // ms between each physics update in pendulum sim mode
+#define PENDULUM_FRICTION 330       // Friction applied to pendulums in pendulum sim mode (Q32)
 #define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
 #define STATISTIC_MODE_TIMEOUT 15000    // ms before switching entering Stope Mode from stats mode due to inactivity
-#define PARTICLE_SIM_INACTIVITY_SPEED 5500  // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
+#define PENDULUM_SIM_INACTIVITY_SPEED 5500  // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
 
 
 typedef i32 q32;
@@ -45,9 +45,9 @@ typedef struct {
 } BTN;
 
 Hand hands[3] = {
-    {1, 0, 0, 0, 0, true},  // Hour hand is static
-    {2, 0, 0, 0, 5, true},  // Minute hand oscillates with tick_div of 5
-    {3, 0, 0, 0, 1, true}   // Second hand oscillates with tick_div of 1
+    {0, 0, 0, 0, 0, true},  // Hour hand is static
+    {0, 0, 0, 0, 5, true},  // Minute hand oscillates with tick_div of 5
+    {0, 0, 0, 0, 1, true}   // Second hand oscillates with tick_div of 1
 };
 
 const volatile LED leds[] = {
@@ -90,7 +90,7 @@ enum Mode {
     MODE_VOLTAGE,
     MODE_TEMPERATURE,
     MODE_TIME_SETTING,
-    MODE_PARTICLE_SIM
+    MODE_PENDULUM_SIM
 } current_mode;
 
 
@@ -130,8 +130,9 @@ void Mode_Temperature_Handler(b8);
 void Mode_Time_Setting_Handler(b8);
 void Mode_Particle_Sim_Handler(b8);
 void Enter_Stop_Mode(void);
-void Restore_Clocks(void);
+void Wakeup_Handler(void);
 
+// TODO: Lower Accel freq when going to sleep & disable double tap
 // TODO: Power and speed optimization
 
 
@@ -150,7 +151,7 @@ void main(void)
     RTC_Set_Time(10, 15, 30);
     RTC_Set_Hands();
 
-    
+
     for EVER
     {
         Mode_Handler();
@@ -159,6 +160,7 @@ void main(void)
             millis - last_activity > INACTIVITY_TIMEOUT) || (millis - last_activity > STATISTIC_MODE_TIMEOUT))
         {
             Enter_Stop_Mode();
+            Wakeup_Handler();
         }
     }
 }
@@ -194,9 +196,11 @@ void TIM21_IRQ_Handler(void)
             {
                 hands[i].value = hands[i].new_value;    // Update hand value to new_value
                 hands[i].new_value = 255;               // Reset new_value
-                hands[i].brightness = 0;                // Reset brightness for breathing effect
-                hands[i].tick = 0;                      // Reset tick for breathing effect
-                hands[i].fading_in = true;              // Start fading in
+                if ((1 << brightness_level) < hands[i].brightness)
+                {
+                    // Make sure max brightness is not exceeded (Hands are reset every brightness change)
+                    hands[i].brightness = (1 << brightness_level);
+                }
             }
 
             // Set brightness and continue if hand is static
@@ -337,13 +341,14 @@ void EXTI4_15_IRQ_Handler(void)
     if (EXTI->PR & (1 << 8))
     {
         EXTI->PR = (1 << 8); // Clear the flag
-        Print_str("Wrist tilt detected\r\n");
     }
 
     // Check PA15 (INT1 - Double Tap)
     if (EXTI->PR & (1 << 15))
     {
         EXTI->PR = (1 << 15); // Clear the flag
+        Print_str("Changing brightness\n");
+        brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
     }
     last_activity = millis;
 }
@@ -423,7 +428,7 @@ void TIM21_Init(void)
 inline void Hand_Set(u8 hand_index, u8 value)
 {
     if (hand_index > 2 || value > 12) return;
-    if (hands[hand_index].new_value == value) return;
+    if (value > 12) return;
     hands[hand_index].new_value = value;
 }
 
@@ -765,7 +770,7 @@ void I2C_Write(u8 addr, u8 reg, u8 *data, u8 size)
 }
 
 // Read data from a slave reg @ addr, reg over I2C
-void I2C_Read(u8 addr, u8 reg, u8 *buff, u8 size)
+void I2C_Read(u8 addr, u8 reg, u8 *buf, u8 size)
 {
     // Wait until I2C is not busy
     while (I2C1->ISR & I2C1_ISR_BUSY) Spin(1);
@@ -783,7 +788,7 @@ void I2C_Read(u8 addr, u8 reg, u8 *buff, u8 size)
     for (int i = 0; i < size; i++)
     {
         while (!(I2C1->ISR & I2C1_ISR_RXNE)) Spin(1);
-        buff[i] = I2C1->RXDR;
+        buf[i] = I2C1->RXDR;
     }
 
     while (!(I2C1->ISR & I2C1_ISR_STOPF)) Spin(1);
@@ -799,88 +804,87 @@ void IMU_Init(void)
     I2C_Write(IMU_ADDR, 0x10, &buf, 1);
 
     // === Enables double tap detection ===
-    // TAP_CFG register (INTERRUPTS_ENABLE) (TAP_X_EN:TAP_Y_EN:TAP_Z_EN)
+    // TAP_CFG register (INTERRUPTS_ENABLE) (TAP_Z_EN)
     buf = (0x1 << 7) | (0x7 << 1);
     I2C_Write(IMU_ADDR, 0x58, &buf, 1);
-    // Configure double tap, detection threshold and time
-    // TAP_THS_6D register (TAP_THS4:0)
-    buf = 0xC;
+
+    // TAP_THS_6D register (TAP_THS)
+    buf = 0x5;
     I2C_Write(IMU_ADDR, 0x59, &buf, 1);
     // INT_DUR2 register (DUR3:0) (QUIET1:0) (SHOCK1:0)
-    buf = (0x5 << 4) | (0x0 << 2) | (0x1);
+    buf = (0x5 << 4) | (0x5 << 2) | (0x3);
     I2C_Write(IMU_ADDR, 0x5A, &buf, 1);
     // WAKE_UP_THS register (SINGLE_DOUBLE_TAP)
     buf = (0x1 << 7);
     I2C_Write(IMU_ADDR, 0x5B, &buf, 1);
 
-    // // === Enable absolute wrist tilt detection == 
-    // // CTRL10_C register (WRIST_TILT_EN) (FUNC_EN)
-    // buf = (0x1 << 7) | (0x1 << 2);
-    // I2C_Write(IMU_ADDR, 0x19, &buf, 1);
-    // // Enable embedded functions register
-    // // FUNC_CFG_ACCESS (FUNC_CFG_EN) ( FUNC_CFG_EN_B)
-    // buf = (0x1 << 7) | (0x1 << 5);
-    // I2C_Write(IMU_ADDR, 0x01, &buf, 1);
+    // === Enable absolute wrist tilt detection == 
+    // CTRL10_C register (WRIST_TILT_EN) (FUNC_EN)
+    buf = (0x1 << 7) | (0x1 << 2);
+    I2C_Write(IMU_ADDR, 0x19, &buf, 1);
+    // FUNC_CFG_ACCESS (FUNC_CFG_EN) ( FUNC_CFG_EN_B)
+    buf = (0x1 << 7) | (0x1 << 5);
+    I2C_Write(IMU_ADDR, 0x01, &buf, 1);
 
-    // // Set wrist til mask register to -X | +Z
-    // // A_WRIST_TILT_Mask register (WRIST_TILT_MASK_ Xneg) (WRIST_TILT_MASK_ Zpos)
-    // buf = (0x1 << 6) | (0x1 << 3);
-    // I2C_Write(IMU_ADDR, 0x59, &buf, 1);
-    // /// Disable embedded functions register
-    // buf = 0x00;
-    // I2C_Write(IMU_ADDR, 0x01, &buf, 1);
+    // A_WRIST_TILT_THS Absolute Wrist Tilt threshold register 1 LSB = 15.625 mg
+    buf = 0x32;
+    I2C_Write(IMU_ADDR, 0x58, &buf, 1);
+    // A_WRIST_TILT_Mask register (Xneg) (Zpos)
+    buf = (0x1 << 3);
+    I2C_Write(IMU_ADDR, 0x59, &buf, 1);
+    // Disable embedded functions register
+    buf = 0x0;
+    I2C_Write(IMU_ADDR, 0x01, &buf, 1);
 
-    // // === Interrupt routing ===
-    // // MD1_CFG register (INT1_DOUBLE_TAP)
-    // buf = (0x1 << 3);
-    // I2C_Write(IMU_ADDR, 0x5E, &buf, 1);
-    // // DRDY_PULSE_CFG register (DRDY_PULSED) (INT2_WRIST_TILT)
-    // buf = 0x1;
+    // === Interrupt routing ===
+    // MD1_CFG register (INT1_DOUBLE_TAP)
+    buf = (0x1 << 3);
+    I2C_Write(IMU_ADDR, 0x5E, &buf, 1);
+    // DRDY_PULSE_CFG register (INT2_WRIST_TILT)
+    buf = 0x1;
     I2C_Write(IMU_ADDR, 0x0B, &buf, 1);
 
-    // TODO: Remove the two lines line below
-    // Set INT1/2 to active low because The INT1 is shorted to VCC (bad soldering on the first prototype)
-    I2C_Write(IMU_ADDR, 0x12, (u8[]){(0x1 << 5) | (0x1 << 2)}, 1);
+    // === Setupt MCU interrupts for IMU events ===
+    // Enable SYSCFG Clock
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
 
-    // // === Setupt MCU interrupts for IMU events ===
-    // // Enable SYSCFG Clock
-    // RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
+    // Configure PA8 and PA15 as Input
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE8, 0x0);
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE15, 0x0);
 
-    // // Configure PA8 and PA15 as Input
-    // BF_SET(GPIOA->MODER, GPIOA_MODER_MODE8, 0x0);
-    // BF_SET(GPIOA->MODER, GPIOA_MODER_MODE15, 0x0);
+    // Map PA8 and PA15 to EXTI Line 8 and 15
+    BF_SET(SYSCFG_COMP->EXTICR3, SYSCFG_COMP_EXTICR3_EXTI8, 0x0);
+    BF_SET(SYSCFG_COMP->EXTICR4, SYSCFG_COMP_EXTICR4_EXTI15, 0x0);
 
-    // // Map PA8 and PA15 to EXTI Line 8 and 15
-    // BF_SET(SYSCFG_COMP->EXTICR3, SYSCFG_COMP_EXTICR3_EXTI8, 0x0);
-    // BF_SET(SYSCFG_COMP->EXTICR4, SYSCFG_COMP_EXTICR4_EXTI15, 0x0);
+    // Enable Rising Edge triggers
+    EXTI->RTSR |= (EXTI_RTSR_RT8 | EXTI_RTSR_RT15);
+    EXTI->IMR  |= (EXTI_IMR_IM8 | EXTI_IMR_IM15);
 
-    // // Enable Rising Edge triggers
-    // EXTI->RTSR |= (EXTI_RTSR_RT8 | EXTI_RTSR_RT15);
-    // EXTI->IMR  |= (EXTI_IMR_IM8 | EXTI_IMR_IM15);
-
-    // // Enable EXTI4_15 Interrupt (IRQ 7)
-    // NVIC->ISER |= (1 << 7);
+    // Enable EXTI4_15 Interrupt (IRQ 7)
+    NVIC->ISER |= (1 << 7);
 }
 
 // Read acceleration from the IMU
 void IMU_Get_Accel(i16 *x, i16 *y, i16 *z)
 {
-    u8 buff[6];
-    I2C_Read(IMU_ADDR, 0x28, buff, 6);
-    *x = (i16)((buff[1] << 8) | buff[0]);
-    *y = (i16)((buff[3] << 8) | buff[2]);
-    *z = (i16)((buff[5] << 8) | buff[4]);
+    u8 buf[6];
+    I2C_Read(IMU_ADDR, 0x28, buf, 6);
+    *x = (i16)((buf[1] << 8) | buf[0]);
+    *y = (i16)((buf[3] << 8) | buf[2]);
+    *z = (i16)((buf[5] << 8) | buf[4]);
 }
 
 // Read temperature from the IMU in m°C
 i32 IMU_Get_Temp(void)
 {
-    u8 buff[2];
-    I2C_Read(IMU_ADDR, 0x20, buff, 2);
+    u8 buf[2];
+    I2C_Read(IMU_ADDR, 0x1E, buf, 1);
+    if ((buf[0] & (1 << 2)) == 0) return 0; // Temp data not ready
+    I2C_Read(IMU_ADDR, 0x20, buf, 2);
 
     // Convert raw value to m°C
     // 256 LSB/°C val=0 @25°C =>  m°C = °C*1000 + ((°C/256) * 39 + 5) / 10 + 25000
-    return (i32)buff[1] * 1000 + (buff[0] * 39 + 5) / 10 + 25000;
+    return (i32)buf[1] * 1000 + (buf[0] * 39 + 5) / 10 + 25000;
 }
 
 
@@ -1098,7 +1102,7 @@ void Mode_Handler(void)
         case MODE_TIME_SETTING:
             Mode_Time_Setting_Handler(false);
             break;
-        case MODE_PARTICLE_SIM:
+        case MODE_PENDULUM_SIM:
             if (btn_up.pressed)
             {
                 btn_up.pressed = false;
@@ -1166,6 +1170,16 @@ void Mode_Temperature_Handler(b8 reset)
         Print_str("IMU Temperature: ");
         Print_u32(temp_mC);
         Print_str(" mC\n");
+
+        if (temp_mC == 0)
+        {
+            hand_h_idx = 0;
+            hand_m_idx = 0;
+            Hand_Set(0, 12);
+            Hand_Set(1, 12);
+            Hand_Set(2, 0);
+            return;
+        }
 
         // Map 0°C-60°C to 0-12 hand_h index (5°C per step)
         // and 0.5°C per step for hand_m index
@@ -1238,7 +1252,7 @@ void Mode_Time_Setting_Handler(b8 reset)
         if (btn_down.pressed)
         {
             btn_down.pressed = false;
-            current_mode = MODE_PARTICLE_SIM;
+            current_mode = MODE_PENDULUM_SIM;
             Mode_Particle_Sim_Handler(true);
         }
         break;
@@ -1282,7 +1296,7 @@ void Mode_Time_Setting_Handler(b8 reset)
     }
 }
 
-// Particle sim mode: display a simple particle simulation
+// Particle sim mode: display a simple pendulum simulation
 void Mode_Particle_Sim_Handler(b8 reset)
 {
     static u32 last_update = 0;
@@ -1300,7 +1314,7 @@ void Mode_Particle_Sim_Handler(b8 reset)
     }
 
     // Update simulation every 10ms for smooth animation
-    if (millis - last_update >= PARTICLE_SIM_DT)
+    if (millis - last_update >= PENDULUM_SIM_DT)
     {
         last_update = millis;
 
@@ -1324,14 +1338,14 @@ void Mode_Particle_Sim_Handler(b8 reset)
         // Integrate accel to get angular velocity
         // Multiply by dt and 1/(2*Pi*r) ~= 11
         // Divide by 1000 to convert ms to s
-        omega += (accel_aligned * PARTICLE_SIM_DT * 11) >> 10;
+        omega += (accel_aligned * PENDULUM_SIM_DT * 11) >> 10;
 
         // Multiply by friction factor (0.98) to prevent runaway and add damping
-        omega -= (omega * PARTICLE_FRICTION) >> FIXED_SHIFT;
+        omega -= (omega * PENDULUM_FRICTION) >> FIXED_SHIFT;
 
         // Integrate omega to get angle
         // Multiply by dt and divide by 1000 to convert ms to s
-        alpha += (omega * PARTICLE_SIM_DT) >> 10;
+        alpha += (omega * PENDULUM_SIM_DT) >> 10;
 
         // Add 1/12/2 for proper rounding
         u32 hand_pos = alpha + FIXED_ONE / 24;
@@ -1343,7 +1357,7 @@ void Mode_Particle_Sim_Handler(b8 reset)
         hand_pos = ((hand_pos * 3) >> 6);
         Hand_Set(0, (hand_pos == 0) ? 12 : hand_pos);
 
-        if (omega > PARTICLE_SIM_INACTIVITY_SPEED || -omega > PARTICLE_SIM_INACTIVITY_SPEED)
+        if (omega > PENDULUM_SIM_INACTIVITY_SPEED || -omega > PENDULUM_SIM_INACTIVITY_SPEED)
         {
             last_activity = millis;
         }
@@ -1374,20 +1388,10 @@ void Enter_Stop_Mode(void)
 
     // Wait For Interrupt
     __asm volatile ("wfi");
-
-    // Restore clocks and reconfigure peripherals after waking up
-    Restore_Clocks();
-    millis = 0;
-    last_activity = 0;
-    current_mode = MODE_TIME;
-
-    // Re-enable RTC wakeup interrupt and update hands to current time
-    EXTI->IMR |= EXTI_IMR_IM20;
-    RTC_Set_Hands();
 }
 
 // Restore clock settings after waking up from Stop Mode
-void Restore_Clocks(void) {
+void Wakeup_Handler(void) {
     // Restart HSI16
     RCC->CR |= RCC_CR_HSI16ON;
     while (!(RCC->CR & RCC_CR_HSI16RDYF)) Spin(1);
@@ -1401,4 +1405,12 @@ void Restore_Clocks(void) {
     
     // Wait for switch to complete
     while (BF_GET(RCC->CFGR, RCC_CFGR_SWS) != 3) Spin(1);
+
+    millis = 0;
+    last_activity = 0;
+    current_mode = MODE_TIME;
+
+    // Re-enable RTC wakeup interrupt and update hands to current time
+    EXTI->IMR |= EXTI_IMR_IM20;
+    RTC_Set_Hands();
 }
