@@ -21,6 +21,7 @@
 #define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
 #define STATISTIC_MODE_TIMEOUT 15000    // ms before switching entering Stope Mode from stats mode due to inactivity
 #define PENDULUM_SIM_INACTIVITY_SPEED 5500  // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
+#define DEBUG false                 // Set to true to enable debug prints over UART
 
 
 typedef i32 q32;
@@ -123,7 +124,6 @@ void RTC_Set_Time(u8, u8, u8);
 void RTC_Get_Time(u8*, u8*, u8*);
 void RTC_Wakeup_Init(void);
 void RTC_Set_Hands(void);
-void BTN_Init(void);
 void Mode_Handler(void);
 void Mode_Voltage_Handler(b8);
 void Mode_Temperature_Handler(b8);
@@ -146,7 +146,6 @@ void main(void)
     RTC_Wakeup_Init();
     I2C_Init();
     IMU_Init();
-    BTN_Init();
 
     RTC_Set_Time(10, 15, 30);
     RTC_Set_Hands();
@@ -349,6 +348,9 @@ void EXTI4_15_IRQ_Handler(void)
         EXTI->PR = (1 << 15); // Clear the flag
         Print_str("Changing brightness\n");
         brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
+        Hand_Set(0, hands[0].value);
+        Hand_Set(1, hands[1].value);
+        Hand_Set(2, hands[2].value);
     }
     last_activity = millis;
 }
@@ -387,7 +389,10 @@ void GPIO_Init(void)
 {
     // Enable GPIOA and GPIOB clocks
     RCC->IOPENR |= RCC_IOPENR_IOPAEN | RCC_IOPENR_IOPBEN;
+    // Enable SYSCFG Clock
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
 
+    // === LEDs ===
     // Set PA1, PA4, PA5, PA6, PA7, PA12 to output (MODE = 01)
     BF_SET(GPIOA->MODER, GPIOA_MODER_MODE1, 0x1);   // PA1 as output
     BF_SET(GPIOA->MODER, GPIOA_MODER_MODE4, 0x1);   // PA4 as output
@@ -395,7 +400,6 @@ void GPIO_Init(void)
     BF_SET(GPIOA->MODER, GPIOA_MODER_MODE6, 0x1);   // PA6 as output
     BF_SET(GPIOA->MODER, GPIOA_MODER_MODE7, 0x1);   // PA7 as output
     BF_SET(GPIOA->MODER, GPIOA_MODER_MODE12, 0x1);  // PA12 as output
-
     // Set PB2, PB3, PB5, PB6, PB7, PB8 to output (MODE = 01)
     BF_SET(GPIOB->MODER, GPIOB_MODER_MODE2, 0x1);   // PB2 as output
     BF_SET(GPIOB->MODER, GPIOB_MODER_MODE3, 0x1);   // PB3 as output
@@ -403,6 +407,60 @@ void GPIO_Init(void)
     BF_SET(GPIOB->MODER, GPIOB_MODER_MODE6, 0x1);   // PB6 as output
     BF_SET(GPIOB->MODER, GPIOB_MODER_MODE7, 0x1);   // PB7 as output
     BF_SET(GPIOB->MODER, GPIOB_MODER_MODE8, 0x1);   // PB8 as output
+
+    // === UART ===
+    if (DEBUG)
+    {
+        // Set alterative pin func
+        BF_SET(GPIOA->MODER, GPIOA_MODER_MODE2, 0x2);   // PA2
+        BF_SET(GPIOA->MODER, GPIOA_MODER_MODE3, 0x2);   // PA3
+        // Enable alterative func
+        BF_SET(GPIOA->AFRL, GPIOA_AFRL_AFSEL2, 0x4);    // PA2
+        BF_SET(GPIOA->AFRL, GPIOA_AFRL_AFSEL3, 0x4);    // PA3
+    }
+
+    // === I2C ===
+    // Set alterative pin func
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE9, 0x2);   // PA9
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE10, 0x2);  // PA10
+    // Set output open-drain
+    GPIOA->OTYPER |= (GPIOA_OTYPER_OT9 | GPIOA_OTYPER_OT10);
+    // Set high speed
+    BF_SET(GPIOA->OSPEEDR, GPIOA_OSPEEDR_OSPEED9, 0x2);
+    BF_SET(GPIOA->OSPEEDR, GPIOA_OSPEEDR_OSPEED10, 0x2);
+    // Enable alterative func
+    BF_SET(GPIOA->AFRH, GPIOA_AFRH_AFSEL9, 0x1);    // PA9
+    BF_SET(GPIOA->AFRH, GPIOA_AFRH_AFSEL10, 0x1);   // PA10
+
+    // === EXTI for IMU Interrupts ===
+    // Configure PA8 and PA15 as Input
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE8, 0x0);
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE15, 0x0);
+    // Map PA8 and PA15 to EXTI Line 8 and 15
+    BF_SET(SYSCFG_COMP->EXTICR3, SYSCFG_COMP_EXTICR3_EXTI8, 0x0);
+    BF_SET(SYSCFG_COMP->EXTICR4, SYSCFG_COMP_EXTICR4_EXTI15, 0x0);
+    // Enable Rising Edge triggers
+    EXTI->RTSR |= (EXTI_RTSR_RT8 | EXTI_RTSR_RT15);
+    EXTI->IMR  |= (EXTI_IMR_IM8 | EXTI_IMR_IM15);
+    // Enable EXTI4_15 Interrupt (IRQ 7)
+    NVIC->ISER |= (1 << 7);
+
+    // === Buttons ===
+        // Configure PB0 and PB1 as Input
+    BF_SET(GPIOB->MODER, GPIOB_MODER_MODE0, 0x0);   // PB0 as input
+    BF_SET(GPIOB->MODER, GPIOB_MODER_MODE1, 0x0);   // PB1 as input
+    // Enable Internal Pull-Ups
+    BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD0, 0x1);
+    BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD1, 0x1);
+    // Map PB0 and PB1 to EXTI Line 0 and 1
+    SYSCFG_COMP->EXTICR1 &= ~(SYSCFG_COMP_EXTICR1_EXTI0_MASK | SYSCFG_COMP_EXTICR1_EXTI1_MASK);
+    SYSCFG_COMP->EXTICR1 |= ((1 << SYSCFG_COMP_EXTICR1_EXTI0_LSB) | (1 << SYSCFG_COMP_EXTICR1_EXTI1_LSB));
+    // Enable Rising and Falling Edge triggers
+    EXTI->FTSR |= (EXTI_FTSR_FT0 | EXTI_FTSR_FT1); // Press
+    EXTI->RTSR |= (EXTI_RTSR_RT0 | EXTI_RTSR_RT1); // Release
+    EXTI->IMR  |= (EXTI_IMR_IM0 | EXTI_IMR_IM1);   // Unmask
+    // Enable EXTI0_1 Interrupt (IRQ 5)
+    NVIC->ISER |= (1 << 5);
 }
 
 // Init TIM21 and enable its interrupt
@@ -435,16 +493,10 @@ inline void Hand_Set(u8 hand_index, u8 value)
 // Init UART at #BUAD
 void UART_Init(void)
 {
+    if (!DEBUG) return;
+
     // Enable clock
     RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
-    
-    // Set alterative pin func
-    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE2, 0x2);   // PA2
-    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE3, 0x2);   // PA3
-
-    // Enable alterative func
-    BF_SET(GPIOA->AFRL, GPIOA_AFRL_AFSEL2, 0x4);    // PA2
-    BF_SET(GPIOA->AFRL, GPIOA_AFRL_AFSEL3, 0x4);    // PA3
 
     // Disable USART
     USART2->CR1 &= ~USART2_CR1_UE;
@@ -487,6 +539,7 @@ void UART_Deinit(void)
 // Sends char over UART
 void Print_char(u8 c)
 {
+    if (!DEBUG) return;
     while (!(USART2->ISR & USART2_ISR_TXE)) Spin(1);
     BF_SET(USART2->TDR, USART2_TDR_TDR, c);
 }
@@ -494,6 +547,7 @@ void Print_char(u8 c)
 // Sends string over UART
 void Print_str(c *str)
 {
+    if (!DEBUG) return;
     while (*str)
     {
         Print_char(*(str++));
@@ -503,6 +557,7 @@ void Print_str(c *str)
 // Sends u32 over UART
 void Print_u32(u32 num)
 {
+    if (!DEBUG) return;
     if (num == 0)
     {
         Print_char('0');
@@ -527,6 +582,7 @@ void Print_u32(u32 num)
 // Sends i32 over UART
 void Print_i32(i32 num)
 {
+    if (!DEBUG) return;
     if (num == 0)
     {
         Print_char('0');
@@ -555,6 +611,7 @@ void Print_i32(i32 num)
 // Sends q32 (q16.16) over UART
 void Print_q32(q32 num)
 {
+    if (!DEBUG) return;
     if (num == 0)
     {
         Print_str("0.0000");
@@ -671,7 +728,7 @@ u32 ADC_Get_VDDA(void)
     Hand_Set(2, 0);
 
     // Wait for hands to update
-    while (hands[2].new_value != 255) Spin(1);
+    while (hands[0].new_value != 255) Spin(1);
     // Start ADC conversion, wait, read
     ADC->CR |= ADC_CR_ADSTART;
     while (!(ADC->ISR & ADC_ISR_EOC)) Spin(1);
@@ -710,21 +767,6 @@ void I2C_Init(void)
 {
     // Enable clock
     RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
-
-    // Set alterative pin func
-    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE9, 0x2);   // PA9
-    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE10, 0x2);  // PA10
-
-    // Set output open-drain
-    GPIOA->OTYPER |= (GPIOA_OTYPER_OT9 | GPIOA_OTYPER_OT10);
-
-    // Set high speed
-    BF_SET(GPIOA->OSPEEDR, GPIOA_OSPEEDR_OSPEED9, 0x2);
-    BF_SET(GPIOA->OSPEEDR, GPIOA_OSPEEDR_OSPEED10, 0x2);
-    
-    // Enable alterative func
-    BF_SET(GPIOA->AFRH, GPIOA_AFRH_AFSEL9, 0x1);    // PA9
-    BF_SET(GPIOA->AFRH, GPIOA_AFRH_AFSEL10, 0x1);   // PA10
 
     // Disable I2C
     I2C1->CR1 &= ~I2C1_CR1_PE;
@@ -798,10 +840,13 @@ void I2C_Read(u8 addr, u8 reg, u8 *buf, u8 size)
 // Init the LSM6DSM IMU
 void IMU_Init(void)
 {
-    // === Set Accel to 416Hz, +/- 4g ===
+    // === Set Accel to 416Hz, +/- 4g, high performance diabled ===
     // CTRL1_XL register (ODR_XL) (FS_XL)
     u8 buf = (0x6 << 4) | (0x2 << 2);
     I2C_Write(IMU_ADDR, 0x10, &buf, 1);
+    // CTRL6_C register (XL_HM_MODE)
+    buf = (0x1 << 4);
+    I2C_Write(IMU_ADDR, 0x15, &buf, 1);
 
     // === Enables double tap detection ===
     // TAP_CFG register (INTERRUPTS_ENABLE) (TAP_Z_EN)
@@ -843,25 +888,6 @@ void IMU_Init(void)
     // DRDY_PULSE_CFG register (INT2_WRIST_TILT)
     buf = 0x1;
     I2C_Write(IMU_ADDR, 0x0B, &buf, 1);
-
-    // === Setupt MCU interrupts for IMU events ===
-    // Enable SYSCFG Clock
-    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
-
-    // Configure PA8 and PA15 as Input
-    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE8, 0x0);
-    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE15, 0x0);
-
-    // Map PA8 and PA15 to EXTI Line 8 and 15
-    BF_SET(SYSCFG_COMP->EXTICR3, SYSCFG_COMP_EXTICR3_EXTI8, 0x0);
-    BF_SET(SYSCFG_COMP->EXTICR4, SYSCFG_COMP_EXTICR4_EXTI15, 0x0);
-
-    // Enable Rising Edge triggers
-    EXTI->RTSR |= (EXTI_RTSR_RT8 | EXTI_RTSR_RT15);
-    EXTI->IMR  |= (EXTI_IMR_IM8 | EXTI_IMR_IM15);
-
-    // Enable EXTI4_15 Interrupt (IRQ 7)
-    NVIC->ISER |= (1 << 7);
 }
 
 // Read acceleration from the IMU
@@ -1015,33 +1041,6 @@ void RTC_Set_Hands(void)
     Hand_Set(0, h);
     Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
     Hand_Set(2, (s / 5 == 0) ? 12 : (s / 5));
-}
-
-// Buttons GPIO and interrupt init
-void BTN_Init(void)
-{
-    // Enable SYSCFG Clock
-    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
-
-    // Configure PB0 and PB1 as Input
-    BF_SET(GPIOB->MODER, GPIOB_MODER_MODE0, 0x0);   // PB0 as input
-    BF_SET(GPIOB->MODER, GPIOB_MODER_MODE1, 0x0);   // PB1 as input
-
-    // Enable Internal Pull-Ups
-    BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD0, 0x1);
-    BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD1, 0x1);
-
-    // Map PB0 and PB1 to EXTI Line 0 and 1
-    SYSCFG_COMP->EXTICR1 &= ~(SYSCFG_COMP_EXTICR1_EXTI0_MASK | SYSCFG_COMP_EXTICR1_EXTI1_MASK);
-    SYSCFG_COMP->EXTICR1 |= ((1 << SYSCFG_COMP_EXTICR1_EXTI0_LSB) | (1 << SYSCFG_COMP_EXTICR1_EXTI1_LSB));
-
-    // Enable Rising and Falling Edge triggers
-    EXTI->FTSR |= (EXTI_FTSR_FT0 | EXTI_FTSR_FT1); // Press
-    EXTI->RTSR |= (EXTI_RTSR_RT0 | EXTI_RTSR_RT1); // Release
-    EXTI->IMR  |= (EXTI_IMR_IM0 | EXTI_IMR_IM1);   // Unmask
-
-    // Enable EXTI0_1 Interrupt (IRQ 5)
-    NVIC->ISER |= (1 << 5);
 }
 
 // Handle mode changes and mode-specific logic
@@ -1370,21 +1369,41 @@ void Enter_Stop_Mode(void)
     // Disable RTC wakeup timer
     EXTI->IMR &= ~EXTI_IMR_IM20;
 
+    // Deinit UART & ADC
+    UART_Deinit();
+    ADC_Deinit();
+
+    // Set IMU to 26Hz
+    u8 buf = (0x2 << 4) | (0x2 << 2);
+    I2C_Write(IMU_ADDR, 0x10, &buf, 1);
+
     // Reset Hands
-    Hand_Set(0, 0); 
+    Hand_Set(0, 0);
     Hand_Set(1, 0);
     Hand_Set(2, 0);
-    while (hands[2].new_value != 255) Spin(1);
+    while (hands[0].new_value != 255) Spin(1);
+
+    // Make sure all LED pins are low
+    GPIOA->BSRR = 0b1000011110010 << 16;
+    GPIOB->BSRR = 0b111101100 << 16;
+
+    // Ensure all I2C transmissions are complete
+    while (I2C1->ISR & I2C1_ISR_BUSY);
+    I2C1->ICR |= I2C1_ICR_STOPCF;
+
+    TIM21->CR1 &= ~TIM21_CR1_CEN;
+    RCC->APB2ENR &= ~RCC_APB2ENR_TIM21EN;
 
     // PWR Control: LPSDSR (Low-power regulator) + Clear PDDS (Stop Mode)
-    PWR->CR |= (1 << 0);  
-    PWR->CR &= ~(1 << 1); 
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
+    PWR->CR |= PWR_CR_LPSDSR;
+    PWR->CR &= ~PWR_CR_PDDS;
 
     // Set SLEEPDEEP bit in System Control Register
     SCB->SCR |= SCB_SCR_SLEEPDEEP;
 
-    // Clear Wakeup Flag (WUF)
-    PWR->CR |= (1 << 3);
+    // Clear Wakeup Flag
+    PWR->CR |= PWR_CR_CWUF;
 
     // Wait For Interrupt
     __asm volatile ("wfi");
@@ -1406,6 +1425,17 @@ void Wakeup_Handler(void) {
     // Wait for switch to complete
     while (BF_GET(RCC->CFGR, RCC_CFGR_SWS) != 3) Spin(1);
 
+    // Enable clocks for peripherals
+    RCC->APB2ENR |= RCC_APB2ENR_TIM21EN;
+    TIM21->CR1 |= TIM21_CR1_CEN;
+    RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
+
+    // Reinit peripherals
+    GPIO_Init();
+    UART_Init();
+    ADC_Init();
+
+    // Reset variables
     millis = 0;
     last_activity = 0;
     current_mode = MODE_TIME;
@@ -1413,4 +1443,8 @@ void Wakeup_Handler(void) {
     // Re-enable RTC wakeup interrupt and update hands to current time
     EXTI->IMR |= EXTI_IMR_IM20;
     RTC_Set_Hands();
+
+    // Set IMU back to 416Hz, +/- 4g
+    u8 buf = (0x6 << 4) | (0x2 << 2);
+    I2C_Write(IMU_ADDR, 0x10, &buf, 1);
 }
