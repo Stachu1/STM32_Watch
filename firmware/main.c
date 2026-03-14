@@ -3,7 +3,7 @@
 #include "types.h"
 
 #define EVER (;;)
-#define SYSCLK 32000000
+#define SYSCLK 4194000
 #define BAUD 115200
 #define TS_CAL1 *((u16*) 0x1FF8007A)
 #define TS_CAL2 *((u16*) 0x1FF8007E)
@@ -18,9 +18,9 @@
 #define STATS_FRAME_TIME 50         // ms between each frame in the stats animation
 #define PENDULUM_SIM_DT 8           // ms between each physics update in pendulum sim mode
 #define PENDULUM_FRICTION 330       // Friction applied to pendulums in pendulum sim mode (Q32)
-#define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
-#define STATISTIC_MODE_TIMEOUT 15000    // ms before switching entering Stope Mode from stats mode due to inactivity
 #define PENDULUM_SIM_INACTIVITY_SPEED 5500  // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
+#define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
+#define STATISTIC_MODE_TIMEOUT 10000    // ms before switching entering Stope Mode from stats mode due to inactivity
 #define DEBUG false                 // Set to true to enable debug prints over UART
 
 
@@ -132,8 +132,8 @@ void Mode_Particle_Sim_Handler(b8);
 void Enter_Stop_Mode(void);
 void Wakeup_Handler(void);
 
-// TODO: Lower Accel freq when going to sleep & disable double tap
-// TODO: Power and speed optimization
+
+// TODO: Bugfixes and speed optimization
 
 
 void main(void)
@@ -164,10 +164,10 @@ void main(void)
     }
 }
 
-// === ISR ===
+// ====== ISR ======
 
 // TIM21 Interrupt Handler for SW PWM control of LEDs
-// (1.8% CPU | 3us ~ 96 cycles @ 6kHz)
+// (3% CPU | 3us ~ 96 cycles)
 void TIM21_IRQ_Handler(void)
 {
     // Clear flag
@@ -355,7 +355,7 @@ void EXTI4_15_IRQ_Handler(void)
     last_activity = millis;
 }
 
-// === Utility Functions ===
+// ====== Utility Functions ======
 
 // Do nothing for 4 clock cyles
 void Spin(u32 count)
@@ -470,9 +470,9 @@ void TIM21_Init(void)
     // Enable TIM21 peripheral clock
     RCC->APB2ENR |= RCC_APB2ENR_TIM21EN;
 
-    // Run at full 32MHz
+    // Run at SYSCLK with no prescaler aiming for 10kHz frequency
     TIM21->PSC = 0;
-    TIM21->ARR = 3200; // 32MHz / 3200 ~ 10kHz for LED PWM updates
+    TIM21->ARR = SYSCLK / 10000;
     
     // Enable update interrupt and start counter
     TIM21->DIER |= TIM21_DIER_UIE;
@@ -495,7 +495,7 @@ void UART_Init(void)
 {
     if (!DEBUG) return;
 
-    // Enable clock
+    // Enable peripheral clock
     RCC->APB1ENR |= RCC_APB1ENR_USART2EN;
 
     // Disable USART
@@ -532,7 +532,7 @@ void UART_Deinit(void)
     BF_SET(GPIOA->AFRL, GPIOA_AFRL_AFSEL2, 0x0);
     BF_SET(GPIOA->AFRL, GPIOA_AFRL_AFSEL3, 0x0);
 
-    // Disable clock
+    // Disable peripheral clock
     RCC->APB1ENR &= ~RCC_APB1ENR_USART2EN;
 }
 
@@ -654,8 +654,9 @@ u8 Ambient_Sense(void)
 // Init ADC for measuring battery voltage and core temperature
 void ADC_Init(void)
 {
-    // Enable clock
+    // Enable peripheral clock and set ADC clock to PCLK/2
     RCC->APB2ENR |= RCC_APB2ENR_ADCEN;
+    BF_SET(ADC->CFGR2, ADC_CFGR2_CKMODE, 0x1);
 
     // Disable ADC
     if (ADC->CR & ADC_CR_ADEN)
@@ -765,7 +766,7 @@ i32 ADC_Get_Temp(void)
 // Init I2C for the IMU
 void I2C_Init(void)
 {
-    // Enable clock
+    // Enable peripheral clock
     RCC->APB1ENR |= RCC_APB1ENR_I2C1EN;
 
     // Disable I2C
@@ -1042,6 +1043,8 @@ void RTC_Set_Hands(void)
     Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
     Hand_Set(2, (s / 5 == 0) ? 12 : (s / 5));
 }
+
+// ====== Mode Handlers ======
 
 // Handle mode changes and mode-specific logic
 void Mode_Handler(void)
@@ -1363,6 +1366,8 @@ void Mode_Particle_Sim_Handler(b8 reset)
     }
 }
 
+// ====== Power Management =====
+
 // Enter Stop Mode for deep sleep with low power consumption
 void Enter_Stop_Mode(void)
 {
@@ -1410,20 +1415,18 @@ void Enter_Stop_Mode(void)
 }
 
 // Restore clock settings after waking up from Stop Mode
-void Wakeup_Handler(void) {
-    // Restart HSI16
-    RCC->CR |= RCC_CR_HSI16ON;
-    while (!(RCC->CR & RCC_CR_HSI16RDYF)) Spin(1);
+void Wakeup_Handler(void)
+{
+    // Enable PWR clock
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN;
 
-    // Restart the PLL 
-    RCC->CR |= RCC_CR_PLLON;
-    while (!(RCC->CR & RCC_CR_PLLRDY)) Spin(1);
+    // Set voltage regulator to 1.2V (Range 3)
+    while (PWR->CSR & PWR_CSR_VOSF) __asm__ volatile ("nop");
+    BF_SET(PWR->CR, PWR_CR_VOS, 0x3); 
+    while (PWR->CSR & PWR_CSR_VOSF) __asm__ volatile ("nop");
 
-    // Switch System Clock back to PLL
-    BF_SET(RCC->CFGR, RCC_CFGR_SW, 3);
-    
-    // Wait for switch to complete
-    while (BF_GET(RCC->CFGR, RCC_CFGR_SWS) != 3) Spin(1);
+    // Set MSI to 4.194 MHz
+    BF_SET(RCC->ICSCR, RCC_ICSCR_MSIRANGE, 0x6);
 
     // Enable clocks for peripherals
     RCC->APB2ENR |= RCC_APB2ENR_TIM21EN;
