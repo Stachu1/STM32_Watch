@@ -3,7 +3,7 @@
 #include "types.h"
 
 #define EVER (;;)
-#define SYSCLK 4194000
+#define SYSCLK 2097000
 #define BAUD 115200
 #define TS_CAL1 *((u16*) 0x1FF8007A)
 #define TS_CAL2 *((u16*) 0x1FF8007E)
@@ -266,7 +266,7 @@ void TIM21_IRQ_Handler(void)
     }
 }
 
-// 1Hz RTC Interrupt Handler for hands update
+// 0.2Hz RTC Interrupt Handler for hands update
 // (5.25us ~ 168 cycles)
 void RTC_IRQ_Handler(void)
 {
@@ -1424,9 +1424,6 @@ void Wakeup_Handler(void)
     while (PWR->CSR & PWR_CSR_VOSF) __asm__ volatile ("nop");
     BF_SET(PWR->CR, PWR_CR_VOS, 0x3); 
     while (PWR->CSR & PWR_CSR_VOSF) __asm__ volatile ("nop");
-
-    // Set MSI to 4.194 MHz
-    BF_SET(RCC->ICSCR, RCC_ICSCR_MSIRANGE, 0x6);
 
     // Enable clocks for peripherals
     RCC->APB2ENR |= RCC_APB2ENR_TIM21EN;

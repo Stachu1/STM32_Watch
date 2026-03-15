@@ -108,9 +108,6 @@ void BootMIS(void)
     BF_SET(PWR->CR, PWR_CR_VOS, 0x3); 
     while (PWR->CSR & PWR_CSR_VOSF) __asm__ volatile ("nop");
 
-    // Set MSI to 4.194 MHz
-    BF_SET(RCC->ICSCR, RCC_ICSCR_MSIRANGE, 0x6);
-
     // Set MSI as System Clock
     BF_SET(RCC->CFGR, RCC_CFGR_SW, 0x0);
     while ((BF_GET(RCC->CFGR, RCC_CFGR_SWS) != 0x00)) __asm__ volatile ("nop");
