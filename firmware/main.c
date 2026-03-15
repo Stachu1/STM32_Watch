@@ -17,11 +17,12 @@
 #define STATS_FRAME_TIME 50         // ms between each frame in the stats animation
 #define SIM_DT 8                    // ms between each physics update in pendulum sim mode
 #define SIM_FRICTION 160            // Friction applied to pendulums in pendulum sim mode (Q32)
+#define SIM_AFTER_TAP_SPEED 327680  // Speed the pendulum is set to on double tap in pendulum sim mode (Q32)
 #define SIM_INACTIVITY_THS 5500     // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
 #define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
 #define STATS_TIMEOUT 10000         // ms before switching entering Stope Mode from stats mode due to inactivity
 #define DEBUG false                 // Set to true to enable debug prints over UART
-#define USE_IMU false                // Set to false to disable IMU for ULP mode or if IMU is not mounted
+#define USE_IMU true                // Set to false to disable IMU for ULP mode or if IMU is not mounted
 
 
 typedef i32 q32;
@@ -88,6 +89,7 @@ u32 millis = 0;
 u32 last_activity = 0;
 u8 brightness_level = MAX_BRIGHTNESS_LEVEL;
 b8 IMU_Enabled = USE_IMU;
+b8 sim_double_tap = false;
 
 enum Mode {
     MODE_TIME,
@@ -138,9 +140,6 @@ void Mode_Time_Setting_Handler(b8);
 void Mode_Pendulum_Sim_Handler(b8);
 void Enter_Stop_Mode(void);
 void Wakeup_Handler(void);
-
-
-// TODO: Double tap in sim mode adds speed in the current direction
 
 
 void main(void)
@@ -284,11 +283,18 @@ void EXTI4_15_IRQ_Handler(void)
     if (EXTI->PR & (1 << 15))
     {
         EXTI->PR = (1 << 15); // Clear the flag
-        Print_str("Changing brightness\n");
-        brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
-        Hand_Set(0, hands[0].position);
-        Hand_Set(1, hands[1].position);
-        Hand_Set(2, hands[2].position);
+        if (current_mode == MODE_PENDULUM_SIM)
+        {
+            sim_double_tap = true;
+        }
+        else
+        {
+            Print_str("Changing brightness\n");
+            brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
+            Hand_Set(0, hands[0].position);
+            Hand_Set(1, hands[1].position);
+            Hand_Set(2, hands[2].position);
+        }
     }
     last_activity = millis;
 }
@@ -809,6 +815,10 @@ void I2C_Init(void)
     
     // Enable I2C
     I2C1->CR1 |= I2C1_CR1_PE;
+
+    // Set alterative pin func
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE9, 0x2);   // PA9
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE10, 0x2);  // PA10
 }
 
 // Deinit I2C
@@ -1398,23 +1408,28 @@ void Mode_Pendulum_Sim_Handler(b8 reset)
     {
         alpha = 0;
         omega = 0;
+        sim_double_tap = false;
         Hand_Set(0, 0);
         Hand_Set(1, 0);
         Hand_Set(2, 0);
         return;
     }
 
-    // Update simulation every 10ms for smooth animation
+    // Let the user know that IMU is disabled
+    if (!IMU_Enabled)
+    {
+        if (millis - last_update >= 3*STATS_FRAME_TIME)
+        {
+            last_update = millis;
+            Hand_Set(0, hands[0].position == 3 ? 9 : 3);
+        }
+        return;
+    }
+
+    // Update simulation
     if (millis - last_update >= SIM_DT)
     {
         last_update = millis;
-
-        // Let the user know that IMU is disabled
-        if (!IMU_Enabled)
-        {
-            Hand_Set(0, hands[0].position == 3 ? 9 : 3);
-            return;
-        }
 
         // Get raw accel data from IMU
         i16 raw_x, raw_y, raw_z;
@@ -1440,6 +1455,12 @@ void Mode_Pendulum_Sim_Handler(b8 reset)
 
         // Multiply by friction factor (0.98) to prevent runaway and add damping
         omega -= (omega * SIM_FRICTION) >> FIXED_SHIFT;
+
+        if (sim_double_tap)
+        {
+            sim_double_tap = false;
+            omega += (omega > 0) ? SIM_AFTER_TAP_SPEED : -SIM_AFTER_TAP_SPEED;
+        }
 
         // Integrate omega to get angle
         // Multiply by dt and divide by 1000 to convert ms to s
