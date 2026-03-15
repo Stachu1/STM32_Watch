@@ -851,7 +851,7 @@ void IMU_Init(void)
 
     // === Enables double tap detection ===
     // TAP_CFG register (INTERRUPTS_ENABLE) (TAP_Z_EN)
-    buf = (0x1 << 7) | (0x7 << 1);
+    buf = (0x1 << 7) | (0x1 << 1);
     I2C_Write(IMU_ADDR, 0x58, &buf, 1);
 
     // TAP_THS_6D register (TAP_THS)
