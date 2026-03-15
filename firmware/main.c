@@ -13,21 +13,22 @@
 #define IMU_ADDR 0x6A               // I2C address of the LSM6DSM IMU (SA0 pulled low)
 #define MAX_BRIGHTNESS_LEVEL 6      // 1 << MAX_BRIGHTNESS_LEVEL = BRIGHTNESS_STEPS
 #define MIN_BRIGHTNESS_LEVEL 3      // Lowest brightness level (too low causes flickering and instability in the effect)
-#define BRIGHTNESS_STEPS (1 << MAX_BRIGHTNESS_LEVEL) // Number of steps in the brightness control (Also changes frame rate)
+#define BRIGHTNESS_STEPS (1 << MAX_BRIGHTNESS_LEVEL) // Number of steps in the brightness control (Impacts frame rate)
 #define STATS_FRAME_TIME 50         // ms between each frame in the stats animation
-#define PENDULUM_SIM_DT 8           // ms between each physics update in pendulum sim mode
-#define PENDULUM_FRICTION 330       // Friction applied to pendulums in pendulum sim mode (Q32)
-#define PENDULUM_SIM_INACTIVITY_SPEED 5500  // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
+#define SIM_DT 8                    // ms between each physics update in pendulum sim mode
+#define SIM_FRICTION 160            // Friction applied to pendulums in pendulum sim mode (Q32)
+#define SIM_INACTIVITY_THS 5500     // min speed before entering Stop Mode (Q32)1 = 2*Pi/s
 #define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
-#define STATISTIC_MODE_TIMEOUT 10000    // ms before switching entering Stope Mode from stats mode due to inactivity
+#define STATS_TIMEOUT 10000         // ms before switching entering Stope Mode from stats mode due to inactivity
 #define DEBUG false                 // Set to true to enable debug prints over UART
+#define USE_IMU true                // Set to false to disable IMU for ULP mode or if IMU is not mounted
 
 
 typedef i32 q32;
 
 typedef struct {
-    u8 new_position;           // New position to set the hand to (1->12 0 for off)
-    u8 position;               // position of the hand (1-12 0 for off)
+    u8 new_position;        // New position to set the hand to (1->12 0 for off)
+    u8 position;            // position of the hand (1-12 0 for off)
     u8 brightness;          // Brightness of the hand (0-(BRIGHTNESS_STEPS-1))
     u8 tick;                // Tick counter for breathing effect
     u8 tick_div;            // Tick divider for breathing speed control
@@ -43,6 +44,7 @@ typedef struct {
     b8 pressed;             // Button was pressed flag (set after release if press was valid)
     b8 down;                // Button is currently held down
     u32 state_history;      // BUtton state history for debouncing (1 bit per sample, 0 for pressed)
+    u32 ignore_until;       // Millis until presses are ignored (used on wakeup and IMU toggle)
 } BTN;
 
 Hand hands[3] = {
@@ -79,12 +81,13 @@ const q32 SIN_LUT[64] = {
 };
 
 const u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-BTN btn_up = {false, false, 0xFFFFFFFF}, btn_down = {false, false, 0xFFFFFFFF};
+BTN btn_up = {false, false, 0xFFFFFFFF, 0}, btn_down = {false, false, 0xFFFFFFFF, 0};
 volatile u32 pwm_step = BRIGHTNESS_STEPS * 3;
 volatile u8 sub_millis = 0;
 u32 millis = 0;
 u32 last_activity = 0;
 u8 brightness_level = MAX_BRIGHTNESS_LEVEL;
+b8 IMU_Enabled = USE_IMU;
 
 enum Mode {
     MODE_TIME,
@@ -116,9 +119,11 @@ void ADC_Deinit(void);
 u32 ADC_Get_VDDA(void);
 i32 ADC_Get_Temp(void);
 void I2C_Init(void);
+void I2C_Deinit(void);
 void I2C_Write(u8, u8, u8*, u8);
 void I2C_Read(u8, u8, u8*, u8);
 void IMU_Init(void);
+void IMU_Deinit(void);
 void IMU_Get_Accel(i16*, i16*, i16*);
 i32 IMU_Get_Temp(void);
 void RTC_Init(void);
@@ -130,12 +135,14 @@ void Mode_Handler(void);
 void Mode_Voltage_Handler(b8);
 void Mode_Temperature_Handler(b8);
 void Mode_Time_Setting_Handler(b8);
-void Mode_Particle_Sim_Handler(b8);
+void Mode_Pendulum_Sim_Handler(b8);
 void Enter_Stop_Mode(void);
 void Wakeup_Handler(void);
 
 
-// TODO: Bugfixes and speed optimization
+// TODO: Stats hand should move from 12 not 1
+// TODO: Double tap in sim mode adds speed in the current direction
+
 
 
 void main(void)
@@ -146,19 +153,21 @@ void main(void)
     ADC_Init();
     RTC_Init();
     RTC_Wakeup_Init();
-    I2C_Init();
-    IMU_Init();
+    if (IMU_Enabled)
+    {
+        I2C_Init();
+        IMU_Init();
+    }
 
     RTC_Set_Time(10, 15, 30);
     RTC_Set_Hands();
-
 
     for EVER
     {
         Mode_Handler();
 
         if ((current_mode != MODE_VOLTAGE && current_mode != MODE_TEMPERATURE &&
-            millis - last_activity > INACTIVITY_TIMEOUT) || (millis - last_activity > STATISTIC_MODE_TIMEOUT))
+            millis - last_activity > INACTIVITY_TIMEOUT) || (millis - last_activity > STATS_TIMEOUT))
         {
             Enter_Stop_Mode();
             Wakeup_Handler();
@@ -409,7 +418,7 @@ void Button_State_Handler(void)
     {
         if (btn_down.down)
         {
-            if (millis > 300) btn_down.pressed = true;
+            if (millis > btn_down.ignore_until) btn_down.pressed = true;
             btn_down.down = false;
         }
     }
@@ -422,7 +431,7 @@ void Button_State_Handler(void)
     {
         if (btn_up.down)
         {
-            if (millis > 300) btn_up.pressed = true;
+            if (millis > btn_up.ignore_until) btn_up.pressed = true;
             btn_up.down = false;
         }
     }
@@ -804,6 +813,21 @@ void I2C_Init(void)
     I2C1->CR1 |= I2C1_CR1_PE;
 }
 
+// Deinit I2C
+void I2C_Deinit(void)
+{
+    while (I2C1->ISR & I2C1_ISR_BUSY);
+
+    // Disable the I2C peripheral
+    I2C1->CR1 &= ~I2C1_CR1_PE;
+
+    // Disable the I2C1 clock in RCC
+    RCC->APB1ENR &= ~RCC_APB1ENR_I2C1EN;
+
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE9, 0x3);   // PA9 to analog
+    BF_SET(GPIOA->MODER, GPIOA_MODER_MODE10, 0x3);  // PA10 to analog
+}
+
 // Write data to a slave reg @ addr, reg over I2C
 void I2C_Write(u8 addr, u8 reg, u8 *data, u8 size)
 {
@@ -910,6 +934,19 @@ void IMU_Init(void)
     // DRDY_PULSE_CFG register (INT2_WRIST_TILT)
     buf = 0x1;
     I2C_Write(IMU_ADDR, 0x0B, &buf, 1);
+}
+
+// Deinit the IMU
+void IMU_Deinit(void)
+{
+    // Power down the Gyro & Accel
+    // Register 0x11 (CTRL2_G) = 0x00
+    u8 buf[] = {0x0, 0x0};
+    I2C_Write(IMU_ADDR, 0x10, buf, 2);
+
+    // Clear the Interrupt masks
+    I2C_Write(IMU_ADDR, 0x5E, buf, 1);
+    I2C_Write(IMU_ADDR, 0x0B, buf, 1);
 }
 
 // Read acceleration from the IMU
@@ -1126,6 +1163,28 @@ void Mode_Handler(void)
             Mode_Time_Setting_Handler(false);
             break;
         case MODE_PENDULUM_SIM:
+            if (btn_down.down && btn_up.down)
+            {
+                if (IMU_Enabled)
+                {
+                    Print_str("Disabling IMU\n");
+                    IMU_Deinit();
+                    I2C_Deinit();
+                    IMU_Enabled = false;
+                }
+                else
+                {
+                    Print_str("Enabling IMU\n");
+                    I2C_Init();
+                    IMU_Init();
+                    IMU_Enabled = true;
+                }
+                Print_str("Mode time\n");
+                current_mode = MODE_TIME;
+                RTC_Set_Hands();
+                btn_down.ignore_until = millis + 300;
+                btn_up.ignore_until = millis + 300;                
+            }
             if (btn_up.pressed)
             {
                 btn_up.pressed = false;
@@ -1140,7 +1199,7 @@ void Mode_Handler(void)
                 current_mode = MODE_TIME;
                 RTC_Set_Hands();
             }
-            Mode_Particle_Sim_Handler(false);
+            Mode_Pendulum_Sim_Handler(false);
             break;
     }
 }
@@ -1275,8 +1334,16 @@ void Mode_Time_Setting_Handler(b8 reset)
         if (btn_down.pressed)
         {
             btn_down.pressed = false;
-            current_mode = MODE_PENDULUM_SIM;
-            Mode_Particle_Sim_Handler(true);
+            if (USE_IMU)
+            {
+                current_mode = MODE_PENDULUM_SIM;
+                Mode_Pendulum_Sim_Handler(true);
+            }
+            else
+            {
+                current_mode = MODE_TIME;
+                RTC_Set_Hands();
+            }
         }
         break;
     case SET_HOURS:
@@ -1319,8 +1386,8 @@ void Mode_Time_Setting_Handler(b8 reset)
     }
 }
 
-// Particle sim mode: display a simple pendulum simulation
-void Mode_Particle_Sim_Handler(b8 reset)
+// Pendulum sim mode: display a simple pendulum simulation
+void Mode_Pendulum_Sim_Handler(b8 reset)
 {
     static u32 last_update = 0;
     static q32 alpha = 0;
@@ -1337,9 +1404,16 @@ void Mode_Particle_Sim_Handler(b8 reset)
     }
 
     // Update simulation every 10ms for smooth animation
-    if (millis - last_update >= PENDULUM_SIM_DT)
+    if (millis - last_update >= SIM_DT)
     {
         last_update = millis;
+
+        // Let the user know that IMU is disabled
+        if (!IMU_Enabled)
+        {
+            Hand_Set(0, hands[0].position == 3 ? 9 : 3);
+            return;
+        }
 
         // Get raw accel data from IMU
         i16 raw_x, raw_y, raw_z;
@@ -1361,14 +1435,14 @@ void Mode_Particle_Sim_Handler(b8 reset)
         // Integrate accel to get angular velocity
         // Multiply by dt and 1/(2*Pi*r) ~= 11
         // Divide by 1000 to convert ms to s
-        omega += (accel_aligned * PENDULUM_SIM_DT * 11) >> 10;
+        omega += (accel_aligned * SIM_DT * 11) >> 10;
 
         // Multiply by friction factor (0.98) to prevent runaway and add damping
-        omega -= (omega * PENDULUM_FRICTION) >> FIXED_SHIFT;
+        omega -= (omega * SIM_FRICTION) >> FIXED_SHIFT;
 
         // Integrate omega to get angle
         // Multiply by dt and divide by 1000 to convert ms to s
-        alpha += (omega * PENDULUM_SIM_DT) >> 10;
+        alpha += (omega * SIM_DT) >> 10;
 
         // Add 1/12/2 for proper rounding
         u32 hand_pos = alpha + FIXED_ONE / 24;
@@ -1380,7 +1454,7 @@ void Mode_Particle_Sim_Handler(b8 reset)
         hand_pos = ((hand_pos * 3) >> 6);
         Hand_Set(0, (hand_pos == 0) ? 12 : hand_pos);
 
-        if (omega > PENDULUM_SIM_INACTIVITY_SPEED || -omega > PENDULUM_SIM_INACTIVITY_SPEED)
+        if (omega > SIM_INACTIVITY_THS || -omega > SIM_INACTIVITY_THS)
         {
             last_activity = millis;
         }
@@ -1399,9 +1473,12 @@ void Enter_Stop_Mode(void)
     UART_Deinit();
     ADC_Deinit();
 
-    // Set IMU to 26Hz
-    u8 buf = (0x2 << 4) | (0x2 << 2);
-    I2C_Write(IMU_ADDR, 0x10, &buf, 1);
+    if (IMU_Enabled)
+    {
+        // Set IMU to 26Hz
+        u8 buf = (0x2 << 4) | (0x2 << 2);
+        I2C_Write(IMU_ADDR, 0x10, &buf, 1);
+    }
 
     // Reset Hands
     Hand_Set(0, 0);
@@ -1460,12 +1537,17 @@ void Wakeup_Handler(void)
     millis = 0;
     last_activity = 0;
     current_mode = MODE_TIME;
+    btn_down.ignore_until = 300;
+    btn_up.ignore_until = 300;
 
     // Re-enable RTC wakeup interrupt and update hands to current time
     EXTI->IMR |= EXTI_IMR_IM20;
     RTC_Set_Hands();
 
-    // Set IMU back to 416Hz, +/- 4g
-    u8 buf = (0x6 << 4) | (0x2 << 2);
-    I2C_Write(IMU_ADDR, 0x10, &buf, 1);
+    if (IMU_Enabled)
+    {
+        // Set IMU back to 416Hz, +/- 4g
+        u8 buf = (0x6 << 4) | (0x2 << 2);
+        I2C_Write(IMU_ADDR, 0x10, &buf, 1);
+    }
 }
