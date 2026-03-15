@@ -1103,11 +1103,12 @@ void RTC_Set_Hands(void)
 {
     u8 h, m, s;
     RTC_Get_Time(&h, &m, &s);
+    s += (m % 5) * 60;
 
     // Set hand new_positions based on current time
     Hand_Set(0, h);
     Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
-    Hand_Set(2, (s / 5 == 0) ? 12 : (s / 5));
+    Hand_Set(2, (s / 25 == 0) ? 12 : (s / 25));
 }
 
 // ====== Mode Handlers ======
