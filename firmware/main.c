@@ -21,7 +21,7 @@
 #define INACTIVITY_TIMEOUT 5000     // ms of inactivity before entering Stop Mode
 #define STATS_TIMEOUT 10000         // ms before switching entering Stope Mode from stats mode due to inactivity
 #define DEBUG false                 // Set to true to enable debug prints over UART
-#define USE_IMU true                // Set to false to disable IMU for ULP mode or if IMU is not mounted
+#define USE_IMU false                // Set to false to disable IMU for ULP mode or if IMU is not mounted
 
 
 typedef i32 q32;
@@ -140,9 +140,7 @@ void Enter_Stop_Mode(void);
 void Wakeup_Handler(void);
 
 
-// TODO: Stats hand should move from 12 not 1
 // TODO: Double tap in sim mode adds speed in the current direction
-
 
 
 void main(void)
@@ -1209,10 +1207,12 @@ void Mode_Voltage_Handler(b8 reset)
 {
     static u32 last_update = 0;
     static u8 hand_idx = 0;
+    static b8 done = false;
 
     if (reset)
     {
         last_update = 0;
+        done = false;
         u32 vdda_mV = ADC_Get_VDDA();
         Print_str("Battery Voltage: ");
         Print_u32(vdda_mV);
@@ -1221,20 +1221,24 @@ void Mode_Voltage_Handler(b8 reset)
         // Map 2.0V-3.2V to 0-12 hand index (100mV per step)
         hand_idx = ((vdda_mV - 2000) / 100);
         if (hand_idx > 12) hand_idx = 12;
-        Hand_Set(0, 1);
+        Hand_Set(0, 12);
         Hand_Set(1, 0);
         Hand_Set(2, 0);
         return;
     }
 
+    if (done) return;
+
     // Wait for hands position to be pulled from new_position
-    if (hands[0].new_position != 255) last_update = millis;
+    if (hands[0].new_position != 255) return;
 
     // Update hand positions gradually for smooth animation
-    if (hands[0].position < hand_idx && millis - last_update >= STATS_FRAME_TIME)
+    if (millis - last_update >= STATS_FRAME_TIME)
     {
         last_update = millis;
-        Hand_Set(0, hands[0].position + 1);
+        u8 new_pos = (hands[0].position == 12) ? 1 : hands[0].position + 1;
+        Hand_Set(0, new_pos);
+        if (new_pos >= hand_idx) done = true;
     }
 }
 
@@ -1244,24 +1248,16 @@ void Mode_Temperature_Handler(b8 reset)
     static u32 last_update = 0;
     static u8 hand_h_idx = 0;
     static u8 hand_m_idx = 0;
+    static b8 done = false;
 
     if (reset)
     {
         last_update = 0;
-        u32 temp_mC = IMU_Get_Temp();
-        Print_str("IMU Temperature: ");
+        done = false;
+        u32 temp_mC = IMU_Enabled ? IMU_Get_Temp() : ADC_Get_Temp();
+        Print_str("Temperature: ");
         Print_u32(temp_mC);
         Print_str(" mC\n");
-
-        if (temp_mC == 0)
-        {
-            hand_h_idx = 0;
-            hand_m_idx = 0;
-            Hand_Set(0, 12);
-            Hand_Set(1, 12);
-            Hand_Set(2, 0);
-            return;
-        }
 
         // Map 0°C-60°C to 0-12 hand_h index (5°C per step)
         // and 0.5°C per step for hand_m index
@@ -1269,28 +1265,33 @@ void Mode_Temperature_Handler(b8 reset)
         hand_m_idx = (temp_mC - hand_h_idx * 5000) / 500;
         if (hand_h_idx > 12) hand_h_idx = 12;
         if (hand_m_idx > 12) hand_m_idx = 12;
-
-        Hand_Set(0, 1);
-        Hand_Set(1, 1);
+        Hand_Set(0, 12);
+        Hand_Set(1, 12);
         Hand_Set(2, 0);
         return;
     }
 
+    if (done) return;
+
     // Wait for hands position to be pulled from new_position
-    if (hands[0].new_position != 255) last_update = millis;
+    if (hands[0].new_position != 255) return;
 
     // Update hand positions gradually for smooth animation
-    if ((hands[0].position < hand_h_idx || hands[1].position < hand_m_idx) && millis - last_update >= STATS_FRAME_TIME)
+    if (millis - last_update >= STATS_FRAME_TIME)
     {
         last_update = millis;
-        if (hands[0].position < hand_h_idx)
+        if (hands[0].position != hand_h_idx)
         {
-            Hand_Set(0, hands[0].position + 1);
+            u8 new_pos = (hands[0].position == 12) ? 1 : hands[0].position + 1;
+            Hand_Set(0, new_pos);
         }
-        if (hands[1].position < hand_m_idx)
+
+        if (hands[1].position != hand_m_idx)
         {
-            Hand_Set(1, hands[1].position + 1);
+            u8 new_pos = (hands[1].position == 12) ? 1 : hands[1].position + 1;
+            Hand_Set(1, new_pos);
         }
+        if (hands[0].position == hand_h_idx && hands[1].position == hand_m_idx) done = true;
     }
 }
 
