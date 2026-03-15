@@ -14,7 +14,6 @@
 #define MAX_BRIGHTNESS_LEVEL 6      // 1 << MAX_BRIGHTNESS_LEVEL = BRIGHTNESS_STEPS
 #define MIN_BRIGHTNESS_LEVEL 3      // Lowest brightness level (too low causes flickering and instability in the effect)
 #define BRIGHTNESS_STEPS (1 << MAX_BRIGHTNESS_LEVEL) // Number of steps in the brightness control (Also changes frame rate)
-#define DEBOUNCE_TIME 50            // ms to debounce button presses
 #define STATS_FRAME_TIME 50         // ms between each frame in the stats animation
 #define PENDULUM_SIM_DT 8           // ms between each physics update in pendulum sim mode
 #define PENDULUM_FRICTION 330       // Friction applied to pendulums in pendulum sim mode (Q32)
@@ -27,8 +26,8 @@
 typedef i32 q32;
 
 typedef struct {
-    u8 new_value;           // New value to set the hand to (1->12 0 for off)
-    u8 value;               // Value of the hand (1-12 0 for off)
+    u8 new_position;           // New position to set the hand to (1->12 0 for off)
+    u8 position;               // position of the hand (1-12 0 for off)
     u8 brightness;          // Brightness of the hand (0-(BRIGHTNESS_STEPS-1))
     u8 tick;                // Tick counter for breathing effect
     u8 tick_div;            // Tick divider for breathing speed control
@@ -42,7 +41,8 @@ typedef struct {
 
 typedef struct {
     b8 pressed;             // Button was pressed flag (set after release if press was valid)
-    u32 press_time;         // Time when the button was pressed (in ms)
+    b8 down;                // Button is currently held down
+    u32 state_history;      // BUtton state history for debouncing (1 bit per sample, 0 for pressed)
 } BTN;
 
 Hand hands[3] = {
@@ -79,7 +79,7 @@ const q32 SIN_LUT[64] = {
 };
 
 const u8 hex_table[16] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-BTN btn_up, btn_down;
+BTN btn_up = {false, false, 0xFFFFFFFF}, btn_down = {false, false, 0xFFFFFFFF};
 volatile u32 pwm_step = BRIGHTNESS_STEPS * 3;
 volatile u8 sub_millis = 0;
 u32 millis = 0;
@@ -99,6 +99,8 @@ void Spin(u32);
 void Delay_us(u32);
 void Delay_ms(u32);
 void GPIO_Init(void);
+void Button_State_Handler(void);
+void Hands_Update_Handler(void);
 void TIM21_Init(void);
 void Hand_Set(u8, u8);
 void UART_Init(void);
@@ -166,8 +168,8 @@ void main(void)
 
 // ====== ISR ======
 
-// TIM21 Interrupt Handler for SW PWM control of LEDs
-// (3% CPU | 3us ~ 96 cycles)
+// TIM21 Interrupt Handler for SW PWM control of LEDs an Button state handling
+// (3% CPU | 3us @ 32MHz ~ 96 cycles)
 void TIM21_IRQ_Handler(void)
 {
     // Clear flag
@@ -179,6 +181,9 @@ void TIM21_IRQ_Handler(void)
     {
         sub_millis = 0;
         millis++;
+
+        // Update button state history
+        Button_State_Handler();
     }
 
     // Begin new PWM cycle
@@ -187,57 +192,9 @@ void TIM21_IRQ_Handler(void)
     {
         // Reset pwm_step
         pwm_step = 0;
-        for (u8 i=0; i<3; i++)
-        {
-            // Update hand value to new_value
-            // (prevents ghosting when hand value changes durring its time slot)
-            if (hands[i].new_value != 255)
-            {
-                hands[i].value = hands[i].new_value;    // Update hand value to new_value
-                hands[i].new_value = 255;               // Reset new_value
-                if ((1 << brightness_level) < hands[i].brightness)
-                {
-                    // Make sure max brightness is not exceeded (Hands are reset every brightness change)
-                    hands[i].brightness = (1 << brightness_level);
-                }
-            }
 
-            // Set brightness and continue if hand is static
-            if (hands[i].tick_div == 0)
-            {
-                hands[i].brightness = (1 << brightness_level);
-                continue;
-            };
-
-            // Update tick and handle breathing effect
-            hands[i].tick++;
-            if (hands[i].tick == hands[i].tick_div)
-            {
-                // Reset tick and update brightness
-                hands[i].tick = 0;
-                u8 b_step = (1 << (brightness_level - MIN_BRIGHTNESS_LEVEL));
-                if (hands[i].fading_in)
-                {
-                    // Increase brightness until max, then start fading out
-                    if (hands[i].brightness + b_step > (1 << brightness_level))
-                    {
-                        hands[i].fading_in = false;
-                        hands[i].brightness -= b_step;
-                    }
-                    else hands[i].brightness += b_step;
-                }
-                else
-                {
-                    // Decrease brightness until min, then start fading in
-                    if (hands[i].brightness - b_step < 0)
-                    {
-                        hands[i].fading_in = true;
-                        hands[i].brightness += b_step;
-                    }
-                    else hands[i].brightness -= b_step;
-                }
-            }
-        }
+        // Update hands brightness and position for the next cycle
+        Hands_Update_Handler();
     }
 
     // Get hand index for the current time slot
@@ -251,23 +208,23 @@ void TIM21_IRQ_Handler(void)
         GPIOA->BSRR = 0b1000011110010 << 16;
         GPIOB->BSRR = 0b111101100 << 16;
 
-        if (hands[hand_idx].brightness > 0 && hands[hand_idx].value > 0)
+        if (hands[hand_idx].brightness > 0 && hands[hand_idx].position > 0)
         {
-            u8 led_on = hands[hand_idx].value - 1;
+            u8 led_on = hands[hand_idx].position - 1;
             leds[led_on].port[6] = (1 << leds[led_on].pin);
         }
     }
 
     // Turn off the LED for the current hand at the end of its brightness cycle
-    if (local_step >= hands[hand_idx].brightness && hands[hand_idx].value > 0)
+    if (local_step >= hands[hand_idx].brightness && hands[hand_idx].position > 0)
     {
-        u8 led_off = hands[hand_idx].value - 1;
+        u8 led_off = hands[hand_idx].position - 1;
         leds[led_off].port[6] = (1 << (leds[led_off].pin + 16));
     }
 }
 
 // 0.2Hz RTC Interrupt Handler for hands update
-// (5.25us ~ 168 cycles)
+// (5.25us @ 32MHz ~ 168 cycles)
 void RTC_IRQ_Handler(void)
 {
     // Clear EXTI Pending bit FIRST
@@ -290,44 +247,18 @@ void RTC_IRQ_Handler(void)
 }
 
 // EXTI Interrupt Handler for buttons
-// (2us ~ 64 cycles)
+// (2us @ 32MHz ~ 64 cycles)
 void EXTI0_1_IRQ_Handler(void)
 {
     // Check PB0 btn_down
     if (EXTI->PR & (1 << 0))
     {
-        if (!(GPIOB->IDR & (1 << 0)))
-        {
-            // LOW -> Falling Edge (PRESSED)
-            btn_down.press_time = millis;
-        }
-        else
-        {
-            // HIGH -> Rising Edge (RELEASED)
-            if (millis > btn_down.press_time && millis - btn_down.press_time >= DEBOUNCE_TIME)
-            {
-                btn_down.pressed = true;
-            }
-        }
         EXTI->PR = (1 << 0); // Clear the flag
     }
 
     // Check PB1 btn_up
     if (EXTI->PR & (1 << 1))
     {
-        if (!(GPIOB->IDR & (1 << 1)))
-        {
-            // LOW -> Falling Edge (PRESSED)
-            btn_up.press_time = millis;
-        }
-        else
-        {
-            // HIGH -> Rising Edge (RELEASED)
-            if (millis > btn_up.press_time && millis - btn_up.press_time >= DEBOUNCE_TIME)
-            {
-                btn_up.pressed = true;
-            }
-        }
         EXTI->PR = (1 << 1); // Clear the flag
     }
     last_activity = millis;
@@ -348,9 +279,9 @@ void EXTI4_15_IRQ_Handler(void)
         EXTI->PR = (1 << 15); // Clear the flag
         Print_str("Changing brightness\n");
         brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
-        Hand_Set(0, hands[0].value);
-        Hand_Set(1, hands[1].value);
-        Hand_Set(2, hands[2].value);
+        Hand_Set(0, hands[0].position);
+        Hand_Set(1, hands[1].position);
+        Hand_Set(2, hands[2].position);
     }
     last_activity = millis;
 }
@@ -453,14 +384,104 @@ void GPIO_Init(void)
     BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD0, 0x1);
     BF_SET(GPIOB->PUPDR, GPIOB_PUPDR_PUPD1, 0x1);
     // Map PB0 and PB1 to EXTI Line 0 and 1
-    SYSCFG_COMP->EXTICR1 &= ~(SYSCFG_COMP_EXTICR1_EXTI0_MASK | SYSCFG_COMP_EXTICR1_EXTI1_MASK);
-    SYSCFG_COMP->EXTICR1 |= ((1 << SYSCFG_COMP_EXTICR1_EXTI0_LSB) | (1 << SYSCFG_COMP_EXTICR1_EXTI1_LSB));
-    // Enable Rising and Falling Edge triggers
+    BF_SET(SYSCFG_COMP->EXTICR1, SYSCFG_COMP_EXTICR1_EXTI0, 0x1); // PB0
+    BF_SET(SYSCFG_COMP->EXTICR1, SYSCFG_COMP_EXTICR1_EXTI1, 0x1); // PB1
+    // Enable Falling Edge triggers
     EXTI->FTSR |= (EXTI_FTSR_FT0 | EXTI_FTSR_FT1); // Press
-    EXTI->RTSR |= (EXTI_RTSR_RT0 | EXTI_RTSR_RT1); // Release
     EXTI->IMR  |= (EXTI_IMR_IM0 | EXTI_IMR_IM1);   // Unmask
     // Enable EXTI0_1 Interrupt (IRQ 5)
     NVIC->ISER |= (1 << 5);
+}
+
+// Button state handler called every 1ms in the TIM21 IRQ Handler
+void Button_State_Handler(void)
+{
+    // Update button state history
+    btn_down.state_history = (btn_down.state_history << 1) | (GPIOB->IDR & (1 << 0) ? 1 : 0);
+    btn_up.state_history = (btn_up.state_history << 1) | (GPIOB->IDR & (1 << 1) ? 1 : 0);
+
+    // Check state_history for stable press or release
+    if ((btn_down.state_history & 0xFF) == 0)
+    {
+        btn_down.down = true;
+    }
+    else if ((btn_down.state_history & 0xFF) == 0xFF)
+    {
+        if (btn_down.down)
+        {
+            if (millis > 300) btn_down.pressed = true;
+            btn_down.down = false;
+        }
+    }
+
+    if ((btn_up.state_history & 0xFF) == 0)
+    {
+        btn_up.down = true;
+    }
+    else if ((btn_up.state_history & 0xFF) == 0xFF)
+    {
+        if (btn_up.down)
+        {
+            if (millis > 300) btn_up.pressed = true;
+            btn_up.down = false;
+        }
+    }
+}
+
+// Hands handler called every 3*BRIGHTNESS_STEPS ms in the TIM21 IRQ Handler
+void Hands_Update_Handler(void)
+{
+    for (u8 i=0; i<3; i++)
+    {
+        // Update hand position to new_position
+        // (prevents ghosting when hand position changes durring its time slot)
+        if (hands[i].new_position != 255)
+        {
+            hands[i].position = hands[i].new_position;    // Update hand position to new_position
+            hands[i].new_position = 255;               // Reset new_position
+            if ((1 << brightness_level) < hands[i].brightness)
+            {
+                // Make sure max brightness is not exceeded (Hands are reset every brightness change)
+                hands[i].brightness = (1 << brightness_level);
+            }
+        }
+
+        // Set brightness and continue if hand is static
+        if (hands[i].tick_div == 0)
+        {
+            hands[i].brightness = (1 << brightness_level);
+            continue;
+        };
+
+        // Update tick and handle breathing effect
+        hands[i].tick++;
+        if (hands[i].tick == hands[i].tick_div)
+        {
+            // Reset tick and update brightness
+            hands[i].tick = 0;
+            u8 b_step = (1 << (brightness_level - MIN_BRIGHTNESS_LEVEL));
+            if (hands[i].fading_in)
+            {
+                // Increase brightness until max, then start fading out
+                if (hands[i].brightness + b_step > (1 << brightness_level))
+                {
+                    hands[i].fading_in = false;
+                    hands[i].brightness -= b_step;
+                }
+                else hands[i].brightness += b_step;
+            }
+            else
+            {
+                // Decrease brightness until min, then start fading in
+                if (hands[i].brightness - b_step < 0)
+                {
+                    hands[i].fading_in = true;
+                    hands[i].brightness += b_step;
+                }
+                else hands[i].brightness -= b_step;
+            }
+        }
+    }
 }
 
 // Init TIM21 and enable its interrupt
@@ -482,12 +503,12 @@ void TIM21_Init(void)
     NVIC->ISER |= (1 << 20);
 }
 
-// Set the value of a hand (1-12, 0 for off)
-inline void Hand_Set(u8 hand_index, u8 value)
+// Set the position of a hand (1-12, 0 for off)
+inline void Hand_Set(u8 hand_index, u8 position)
 {
-    if (hand_index > 2 || value > 12) return;
-    if (value > 12) return;
-    hands[hand_index].new_value = value;
+    if (hand_index > 2 || position > 12) return;
+    if (position > 12) return;
+    hands[hand_index].new_position = position;
 }
 
 // Init UART at #BUAD
@@ -721,15 +742,15 @@ u32 ADC_Get_VDDA(void)
     ADC->CHSELR = ADC_CHSELR_CHSEL17;
 
     // Turn off the LEDs to reduce voltage drop druring measurment
-    u8 h = hands[0].value;
-    u8 m = hands[1].value;
-    u8 s = hands[2].value;
+    u8 h = hands[0].position;
+    u8 m = hands[1].position;
+    u8 s = hands[2].position;
     Hand_Set(0, 0);
     Hand_Set(1, 0);
     Hand_Set(2, 0);
 
     // Wait for hands to update
-    while (hands[0].new_value != 255) Spin(1);
+    while (hands[0].new_position != 255) Spin(1);
     // Start ADC conversion, wait, read
     ADC->CR |= ADC_CR_ADSTART;
     while (!(ADC->ISR & ADC_ISR_EOC)) Spin(1);
@@ -1032,13 +1053,13 @@ void RTC_Wakeup_Init(void)
     NVIC->ISER |= (1 << 2);
 }
 
-// Update hand new_values based on current RTC time
+// Update hand new_positions based on current RTC time
 void RTC_Set_Hands(void)
 {
     u8 h, m, s;
     RTC_Get_Time(&h, &m, &s);
 
-    // Set hand new_values based on current time
+    // Set hand new_positions based on current time
     Hand_Set(0, h);
     Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
     Hand_Set(2, (s / 5 == 0) ? 12 : (s / 5));
@@ -1110,7 +1131,7 @@ void Mode_Handler(void)
                 btn_up.pressed = false;
                 Print_str("Changing brightness\n");
                 brightness_level = (brightness_level == MAX_BRIGHTNESS_LEVEL) ? MIN_BRIGHTNESS_LEVEL : brightness_level + 1;
-                Hand_Set(0, hands[0].value);
+                Hand_Set(0, hands[0].position);
             }
             if (btn_down.pressed)
             {
@@ -1147,14 +1168,14 @@ void Mode_Voltage_Handler(b8 reset)
         return;
     }
 
-    // Wait for hands value to be pulled from new_value
-    if (hands[0].new_value != 255) last_update = millis;
+    // Wait for hands position to be pulled from new_position
+    if (hands[0].new_position != 255) last_update = millis;
 
-    // Update hand values gradually for smooth animation
-    if (hands[0].value < hand_idx && millis - last_update >= STATS_FRAME_TIME)
+    // Update hand positions gradually for smooth animation
+    if (hands[0].position < hand_idx && millis - last_update >= STATS_FRAME_TIME)
     {
         last_update = millis;
-        Hand_Set(0, hands[0].value + 1);
+        Hand_Set(0, hands[0].position + 1);
     }
 }
 
@@ -1196,20 +1217,20 @@ void Mode_Temperature_Handler(b8 reset)
         return;
     }
 
-    // Wait for hands value to be pulled from new_value
-    if (hands[0].new_value != 255) last_update = millis;
+    // Wait for hands position to be pulled from new_position
+    if (hands[0].new_position != 255) last_update = millis;
 
-    // Update hand values gradually for smooth animation
-    if ((hands[0].value < hand_h_idx || hands[1].value < hand_m_idx) && millis - last_update >= STATS_FRAME_TIME)
+    // Update hand positions gradually for smooth animation
+    if ((hands[0].position < hand_h_idx || hands[1].position < hand_m_idx) && millis - last_update >= STATS_FRAME_TIME)
     {
         last_update = millis;
-        if (hands[0].value < hand_h_idx)
+        if (hands[0].position < hand_h_idx)
         {
-            Hand_Set(0, hands[0].value + 1);
+            Hand_Set(0, hands[0].position + 1);
         }
-        if (hands[1].value < hand_m_idx)
+        if (hands[1].position < hand_m_idx)
         {
-            Hand_Set(1, hands[1].value + 1);
+            Hand_Set(1, hands[1].position + 1);
         }
     }
 }
@@ -1241,7 +1262,7 @@ void Mode_Time_Setting_Handler(b8 reset)
         if (millis - last_update >= STATS_FRAME_TIME / 2)
         {
             last_update = millis;
-            Hand_Set(0, (hands[0].value == 12) ? 1 : hands[0].value + 1);
+            Hand_Set(0, (hands[0].position == 12) ? 1 : hands[0].position + 1);
         }
         if (btn_up.pressed)
         {
@@ -1282,7 +1303,7 @@ void Mode_Time_Setting_Handler(b8 reset)
             current_mode = MODE_TIME;
             RTC_Set_Time(h, m, 0);
 
-            // Set hand new_values based on current time
+            // Set hand new_positions based on current time
             Hand_Set(0, h);
             Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
             Hand_Set(2, 12);
@@ -1386,7 +1407,7 @@ void Enter_Stop_Mode(void)
     Hand_Set(0, 0);
     Hand_Set(1, 0);
     Hand_Set(2, 0);
-    while (hands[0].new_value != 255) Spin(1);
+    while (hands[0].new_position != 255) Spin(1);
 
     // Make sure all LED pins are low
     GPIOA->BSRR = 0b1000011110010 << 16;
