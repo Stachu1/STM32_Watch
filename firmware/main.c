@@ -364,6 +364,8 @@ void GPIO_Init(void)
     }
 
     // === I2C ===
+    if (USE_IMU)
+    {
     // Set alterative pin func
     BF_SET(GPIOA->MODER, GPIOA_MODER_MODE9, 0x2);   // PA9
     BF_SET(GPIOA->MODER, GPIOA_MODER_MODE10, 0x2);  // PA10
@@ -388,6 +390,7 @@ void GPIO_Init(void)
     EXTI->IMR  |= (EXTI_IMR_IM8 | EXTI_IMR_IM15);
     // Enable EXTI4_15 Interrupt (IRQ 7)
     NVIC->ISER |= (1 << 7);
+    }
 
     // === Buttons ===
         // Configure PB0 and PB1 as Input
@@ -894,7 +897,7 @@ void I2C_Read(u8 addr, u8 reg, u8 *buf, u8 size)
 // Init the LSM6DSM IMU
 void IMU_Init(void)
 {
-    // === Set Accel to 416Hz, +/- 4g, high performance diabled ===
+    // === Set Accel to 416Hz, +/- 4g, high performance disabled ===
     // CTRL1_XL register (ODR_XL) (FS_XL)
     u8 buf = (0x6 << 4) | (0x2 << 2);
     I2C_Write(IMU_ADDR, 0x10, &buf, 1);
@@ -970,14 +973,28 @@ void IMU_Get_Accel(i16 *x, i16 *y, i16 *z)
 // Read temperature from the IMU in m°C
 i32 IMU_Get_Temp(void)
 {
+    static i32 last_temp = 25000; // Start at 25°C
+    u32 timeout = 10000;
     u8 buf[2];
-    I2C_Read(IMU_ADDR, 0x1E, buf, 1);
-    if ((buf[0] & (1 << 2)) == 0) return 0; // Temp data not ready
-    I2C_Read(IMU_ADDR, 0x20, buf, 2);
 
-    // Convert raw value to m°C
-    // 256 LSB/°C val=0 @25°C =>  m°C = °C*1000 + ((°C/256) * 39 + 5) / 10 + 25000
-    return (i32)buf[1] * 1000 + (buf[0] * 39 + 5) / 10 + 25000;
+    while (timeout--)
+    {
+        I2C_Read(IMU_ADDR, 0x1E, buf, 1);
+        if (buf[0] & 0x4) break;
+    }
+
+    if (buf[0] & 0x4)
+    {
+        I2C_Read(IMU_ADDR, 0x20, buf, 2);
+
+        // Combine into  i16
+        i16 raw_temp = (i16)((buf[1] << 8) | buf[0]);
+
+        // Convert raw_temp to m°C
+        last_temp = (i32)((raw_temp * 125) >> 5) + 25000;
+    }
+
+    return last_temp;
 }
 
 
@@ -1222,7 +1239,7 @@ void Mode_Voltage_Handler(b8 reset)
 
     if (reset)
     {
-        last_update = 0;
+        last_update = millis;
         done = false;
         u32 vdda_mV = ADC_Get_VDDA();
         Print_str("Battery Voltage: ");
@@ -1232,6 +1249,7 @@ void Mode_Voltage_Handler(b8 reset)
         // Map 2.0V-3.2V to 0-12 hand index (100mV per step)
         hand_idx = ((vdda_mV - 2000) / 100);
         if (hand_idx > 12) hand_idx = 12;
+        if (hand_idx == 0) done = true;
         Hand_Set(0, 12);
         Hand_Set(1, 0);
         Hand_Set(2, 0);
@@ -1263,19 +1281,24 @@ void Mode_Temperature_Handler(b8 reset)
 
     if (reset)
     {
-        last_update = 0;
+        last_update = millis;
         done = false;
         u32 temp_mC = IMU_Enabled ? IMU_Get_Temp() : ADC_Get_Temp();
         Print_str("Temperature: ");
         Print_u32(temp_mC);
         Print_str(" mC\n");
 
+        // Clamp temp to 0°C-65°C range (0-64999 mC)
+        if (temp_mC < 0) temp_mC = 0;
+        if (temp_mC > 64999) temp_mC = 64999;
+
         // Map 0°C-60°C to 0-12 hand_h index (5°C per step)
         // and 0.5°C per step for hand_m index
         hand_h_idx = temp_mC / 5000;
         hand_m_idx = (temp_mC - hand_h_idx * 5000) / 500;
         if (hand_h_idx > 12) hand_h_idx = 12;
-        if (hand_m_idx > 12) hand_m_idx = 12;
+        if (hand_m_idx == 0) hand_m_idx = 12;
+        Print_str("\n");
         Hand_Set(0, 12);
         Hand_Set(1, 12);
         Hand_Set(2, 0);
@@ -1291,18 +1314,20 @@ void Mode_Temperature_Handler(b8 reset)
     if (millis - last_update >= STATS_FRAME_TIME)
     {
         last_update = millis;
-        if (hands[0].position != hand_h_idx)
+        done = true;
+        if (hand_h_idx != 0 && hands[0].position != hand_h_idx)
         {
+            done = false;
             u8 new_pos = (hands[0].position == 12) ? 1 : hands[0].position + 1;
             Hand_Set(0, new_pos);
         }
 
-        if (hands[1].position != hand_m_idx)
+        if (hand_m_idx != 0 && hands[1].position != hand_m_idx)
         {
+            done = false;
             u8 new_pos = (hands[1].position == 12) ? 1 : hands[1].position + 1;
             Hand_Set(1, new_pos);
         }
-        if (hands[0].position == hand_h_idx && hands[1].position == hand_m_idx) done = true;
     }
 }
 
