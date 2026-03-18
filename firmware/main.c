@@ -178,7 +178,7 @@ void main(void)
 // (3% CPU | 3us @ 32MHz ~ 96 cycles)
 void TIM21_IRQ_Handler(void)
 {
-    // Clear flag
+    // Clear the flag
     TIM21->SR &= ~TIM21_SR_UIF;
 
     // Update millis
@@ -233,7 +233,7 @@ void TIM21_IRQ_Handler(void)
 // (5.25us @ 32MHz ~ 168 cycles)
 void RTC_IRQ_Handler(void)
 {
-    // Clear EXTI Pending bit FIRST
+    // Clear the flag
     EXTI->PR = EXTI_PR_PIF20;
 
     // Check if Wakeup Timer caused the interrupt
@@ -523,7 +523,6 @@ void TIM21_Init(void)
 inline void Hand_Set(u8 hand_index, u8 position)
 {
     if (hand_index > 2 || position > 12) return;
-    if (position > 12) return;
     hands[hand_index].new_position = position;
 }
 
@@ -1120,12 +1119,21 @@ void RTC_Set_Hands(void)
 {
     u8 h, m, s;
     RTC_Get_Time(&h, &m, &s);
-    s += (m % 5) * 60;
+
+    // Map time to hand positions
+    u32 hand_h = h;
+    if (hand_h > 12) hand_h -= 12;
+    if (hand_h == 0) hand_h = 12;
+
+    u32 hand_m = (m < 5) ? 12 : (m / 5);
+
+    u32 hand_s = (u32)s + (m % 5) * 60;
+    hand_s = (hand_s < 25) ? 12 : (hand_s / 25);
 
     // Set hand new_positions based on current time
-    Hand_Set(0, h);
-    Hand_Set(1, (m / 5 == 0) ? 12 : (m / 5));
-    Hand_Set(2, (s / 25 == 0) ? 12 : (s / 25));
+    Hand_Set(0, hand_h);
+    Hand_Set(1, hand_m);
+    Hand_Set(2, hand_s);
 }
 
 // ====== Mode Handlers ======

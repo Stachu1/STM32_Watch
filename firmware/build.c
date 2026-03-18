@@ -76,9 +76,6 @@ int build(void) {
     nob_cmd_append(&cmd, CC, LDFLAGS, "boot.o", "rt.o", "rt_asm.o", "main.o", "-o", "firmware.elf");
     if (!nob_cmd_run(&cmd)) return 1;
 
-    /*nob_cmd_append(&cmd, OBJDUMP, "-d", "firmware_m4.elf");
-    if (!nob_cmd_run(&cmd)) return 1;*/
-
     return 0;
 }
 
