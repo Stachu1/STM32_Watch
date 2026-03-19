@@ -156,7 +156,7 @@ void main(void)
         IMU_Init();
     }
 
-    RTC_Set_Time(10, 15, 30);
+    RTC_Set_Time(10, 17, 30);
     RTC_Set_Hands();
 
     for EVER
@@ -1006,6 +1006,7 @@ void RTC_Init(void)
     // Start LSE and wait until ready
     if (!(RCC->CSR & RCC_CSR_LSERDY))
     {
+        BF_SET(RCC->CSR, RCC_CSR_LSEDRV, 0x2);
         RCC->CSR |= RCC_CSR_LSEON;
         while (!(RCC->CSR & RCC_CSR_LSERDY)) Spin(10);
     }
