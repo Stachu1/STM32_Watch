@@ -94,12 +94,12 @@ Tested on a CR2032 @ ~2.9V
 - Two push buttons
 - Powered by a CR2032 battery
 
-<img width="500" height="549" alt="image" src="https://github.com/user-attachments/assets/834a7873-24d1-477f-8f74-5b5cd947f12e" />
-<img width="500" height="549" alt="IMG_4101" src="https://github.com/user-attachments/assets/f59391d3-52ff-4921-98b7-3f072621f65f" />
+<img width="400" height="439" alt="image" src="https://github.com/user-attachments/assets/834a7873-24d1-477f-8f74-5b5cd947f12e" />
+<img width="400" height="439" alt="IMG_4101" src="https://github.com/user-attachments/assets/f59391d3-52ff-4921-98b7-3f072621f65f" />
 
-<img width="332" height="444" alt="IMG_4097" src="https://github.com/user-attachments/assets/fd066a6f-1798-40fe-af9e-7129ccd4bbab" />
-<img width="332" height="444" alt="IMG_4099" src="https://github.com/user-attachments/assets/74d63b61-c85f-460e-bb64-6c354a5a50cd" />
-<img width="332" height="444" alt="IMG_4100" src="https://github.com/user-attachments/assets/b4dea928-5fc9-495e-9a0b-eb06f8b9351d" />
+<img width="267" height="357" alt="IMG_4097" src="https://github.com/user-attachments/assets/fd066a6f-1798-40fe-af9e-7129ccd4bbab" />
+<img width="267" height="357" alt="IMG_4099" src="https://github.com/user-attachments/assets/74d63b61-c85f-460e-bb64-6c354a5a50cd" />
+<img width="267" height="357" alt="IMG_4100" src="https://github.com/user-attachments/assets/b4dea928-5fc9-495e-9a0b-eb06f8b9351d" />
 
 
 All LEDs are connected to ground through a single 100 Ω resistor, which is acceptable because only one LED is on at a time.
@@ -157,6 +157,8 @@ clang build.c -o build
 ---
 
 ### Build & Flash (ST-LINK + OpenOCD)
+
+Solder ST-LINK SWD connections to the test points on the back. (Or just hold a pinheader on them)
 
 ```bash
 ./build flash
