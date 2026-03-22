@@ -1,4 +1,5 @@
 # STM32 Watch
+<img width="550" height="510" alt="image" src="https://github.com/user-attachments/assets/adb3dd84-9512-466d-9a0b-b8bb77398ba6" />
 
 A minimalist, bare-metal wristwatch built around an STM32L0 microcontroller.
 No HAL, no RTOS, no libraries. Just registers.
@@ -22,12 +23,62 @@ This is a fully custom PCB watch powered by a CR2032 coin cell, using 12 discret
 - Double tap to change LED brightness
 - Pendulum simulation
 
+## Modes
+
+### Time display
+
+- Hour hand: Static LED
+- Minute hand: Slow fade in and out
+- Subminutes (full rotation every 5min) hand: Quick fade in and out
+
+### Statistics (Battery voltage, IMU/MCU temperature)
+
+Battery voltage = Hour / 10 + 2V
+
+(If hour hand is at 9 the battery voltage is 0.9V + 2V = 2.9V)
+
+IMU/MCU temperature = Hour * 5°C + Minute * 0.1°C
+
+(If hour hand is at 4 and minute hand is at 35 the temperature is 4*5°C + 35*0.1°C = 23.5°C)
+
+
+### Time setting
+
+Hour hand running in a circle indicated you are in the time setting mode.
+Press Upper button to go into hour setting then press lower button to move the hour hand form 12 to 1, 2, 3 up to the current time. Confirm with the Upper button. Reapeat for minutes. After confirming minutes the watch will go back to Time display mode.
+
+### Pendulum simulation
+
+If the LEDs at 3 and 9 blink the IMU is disabled. You can enable it by pressing both buttons at once. This will enable the IMU and change mode to Time display.
+
+IF the IMU is enbaled ther hour hand will behave like a pendulum with very low friction. I reacts to the acceleration vector in the XY plane so either tilting or moving the watch arround can cause the hour hand to move.
+
+By double tapping the watch you can add 5 rotations a seconds to the pendulum in the current rotation direction.
+
+If you wanna disalbe the IMU just press both buttons at once. The watch will disable the IMU and go back to the Time display mode.
+
+## Mode changing
+
+| *Current Mode* | *Action* | *Effect* |
+|:-: | :-: | :- |
+| Time display | Upper button | Change brightness |
+| Time display | Double tap | Change brightness (if IMU enabled) |
+| Time display | Lower button | Change mode to Stats (battery voltage) |
+| Statistics | Upper button | Cycle stats (voltage/temperature) |
+| Statistics | Lower button | Change mode to Time setting |
+| Time setting | Upper button | Set hour/minute or confirm and change mode to Time display |
+| Time setting | Lower button | Change mode to Pendulum simulation or increment hour/minute hand |
+| Pendulum simulation | Upper button | Change brightness |
+| Pendulum simulation | Double tap | Add +/- 5 rotations/second to the pendulum speed |
+| Pendulum simulation | Upper & Lower buttons | Enable/Disable IMU (All the IMU features won't work if the IMU is disabled) |
+| Pendulum simulation | Lower button | Change mode to Time display |
+
 ## Power Consumption
 
 Tested on a CR2032 @ ~2.9V
 
-| Mode | Current | Wakeup |
-|:-: | :-: | :---: |
+| *Mode* | *Current* | *Wakeup* |
+|:-: | :-: | :-: |
 | Active (display on) | ~3mA | - |
 | Stop mode (sleep) | 22uA | AWT or Buttons |
 | Ultra low power (IMU off) | 5.5uA | Buttons |
@@ -42,6 +93,14 @@ Tested on a CR2032 @ ~2.9V
 - Time display: 12 discrete LEDs
 - Two push buttons
 - Powered by a CR2032 battery
+
+<img width="500" height="549" alt="image" src="https://github.com/user-attachments/assets/834a7873-24d1-477f-8f74-5b5cd947f12e" />
+<img width="500" height="549" alt="IMG_4101" src="https://github.com/user-attachments/assets/f59391d3-52ff-4921-98b7-3f072621f65f" />
+
+<img width="332" height="444" alt="IMG_4097" src="https://github.com/user-attachments/assets/fd066a6f-1798-40fe-af9e-7129ccd4bbab" />
+<img width="332" height="444" alt="IMG_4099" src="https://github.com/user-attachments/assets/74d63b61-c85f-460e-bb64-6c354a5a50cd" />
+<img width="332" height="444" alt="IMG_4100" src="https://github.com/user-attachments/assets/b4dea928-5fc9-495e-9a0b-eb06f8b9351d" />
+
 
 All LEDs are connected to ground through a single 100 Ω resistor, which is acceptable because only one LED is on at a time.
 
