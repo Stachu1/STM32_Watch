@@ -39,7 +39,7 @@ Battery voltage = Hour / 10 + 2V
 
 IMU/MCU temperature = Hour * 5°C + Minute * 0.1°C
 
-(If hour hand is at 4 and minute hand is at 35 the temperature is 4*5°C + 35*0.1°C = 23.5°C)
+(If hour hand is at 4 and minute hand is at 35 the temperature is 4 * 5°C + 35 * 0.1°C = 23.5°C)
 
 
 ### Time setting
